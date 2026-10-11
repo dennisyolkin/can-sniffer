@@ -96,6 +96,13 @@ with a 4-bit checksum + 4-bit process counter.
 - **12 V battery SoC** (user: 92% before, 84% after): not found. The 12 V sensor (IBS) talks LIN to the
   body computer (`LIN` in PSA-RE). Voltage is available (`50D`).
 
+- **Traffic sign IDs** (`59E` b0, b4): PSA-RE has no value table (plain number 1-254). In trip1 only 32
+  `59E` frames survived, too few to map numbers to signs. Needs a complete capture plus notes of which
+  signs were passed. Meanwhile `5F2` b2 (speed limit read by the camera, km/h) is directly usable.
+- **Turn indicators** (`612` b1 bits 7-6): decoding fits trip1 (left → left turn), but right-indicator
+  episodes at roundabouts make it a weak check. Confirm with an action log. It is the stalk request, not
+  the lamp state.
+
 ## Ground truth from the user (trip1)
 
 - Odometer after the trip: ~25,673 km (confirmed).
