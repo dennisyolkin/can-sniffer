@@ -8,6 +8,7 @@ dependencies = [
     "pandas",
     "pyarrow",
     "matplotlib",
+    "pyyaml",
 ]
 
 [tool.uv]

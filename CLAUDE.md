@@ -195,4 +195,7 @@ Captures are analyzed on the laptop. If helper scripts are added, put them under
   `canlog.py` parses `can.log` and caches it as `can.parquet` in the session directory.
 - `inventory.py` (health + per-ID table), `bytestats.py` (per-byte classes), `plot.py` (fields over time,
   to PNG), `correlate.py` (rank fields against a reference), `trends.py` (slowly rising/falling fields).
+- `psare.py` decodes a capture with [PSA-RE](https://github.com/prototux/PSA-RE) frame definitions (needs a
+  local checkout; the ë-C4 is `AEE2010.electric`, bus `HS.HS1`). PSA-RE covers 79 of the 87 IDs on this bus,
+  but not every definition fits this car; check values before trusting one.
 - Decoded signals, confidence levels and open questions: [docs/signals.md](docs/signals.md).
