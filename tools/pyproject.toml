@@ -1,0 +1,14 @@
+[project]
+name = "can-sniffer-tools"
+version = "0.1.0"
+description = "Off-device analysis of can-sniffer captures"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "matplotlib",
+]
+
+[tool.uv]
+package = false

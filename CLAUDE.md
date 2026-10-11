@@ -190,3 +190,9 @@ idf.py menuconfig
 
 Captures are analyzed on the laptop. If helper scripts are added, put them under `tools/`
 (Python is fine there), separate from the firmware.
+
+- Run with `uv run --project tools tools/<script>.py <session_dir> ...` (deps in `tools/pyproject.toml`).
+  `canlog.py` parses `can.log` and caches it as `can.parquet` in the session directory.
+- `inventory.py` (health + per-ID table), `bytestats.py` (per-byte classes), `plot.py` (fields over time,
+  to PNG), `correlate.py` (rank fields against a reference), `trends.py` (slowly rising/falling fields).
+- Decoded signals, confidence levels and open questions: [docs/signals.md](docs/signals.md).
