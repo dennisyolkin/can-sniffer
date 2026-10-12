@@ -387,6 +387,11 @@ esp_err_t sd_logger_init(void) {
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.host_id = SD_SPI_HOST;
     slot_config.gpio_cs = SD_PIN_CS;
+    // Before every command the driver waits (default up to 40 ms) for MISO to read high with CS
+    // deasserted. MISO is GPIO 2 with no pull-up, so it reads low and every command paid the
+    // full timeout: trip2 saw ~375 ms per 8 KB write (~20 KB/s). Busy is still polled after
+    // each write with CS asserted, which is where the card actually signals it.
+    slot_config.wait_for_miso = -1;
 
     err = esp_vfs_fat_sdspi_mount(
         SD_MOUNT_POINT,

@@ -10,6 +10,9 @@ PSA-RE agree; **PSA-RE** = from PSA-RE and plausible on our data, not checked in
 Sources:
 - **trip1** (2026-10-11): ~32 min drive, 23 km, from cold start to park. Only 16.8% of frames were logged
   (logger stalls), so rare frames and exact timing are unreliable in it.
+- **trip2** (2026-10-12): ~3.6 min parked: wake with brake pedal, ready on, P → D, drive mode button, parking
+  brake auto-release and re-apply, D → P, off, driver door open/close, lock from inside. 57.5% of frames
+  logged (SD writer too slow), but every state change was caught. Action log under "Ground truth (trip2)".
 - **PSA-RE** ([github.com/prototux/PSA-RE](https://github.com/prototux/PSA-RE)): community database of PSA
   frames in YAML. The ë-C4 is car code `C41`, architecture `AEE2010.electric` (child of `.ev`, `.full`).
   Decode a capture with `tools/psare.py <session> <PSA-RE checkout>`; it resolves the variant chain.
@@ -66,9 +69,9 @@ with a 4-bit checksum + 4-bit process counter.
 | 208 | b2 / b5 | Actual torque / torque without gearbox reduction | Nm (−100 offset) | PSA-RE | b5 was our "motor torque" |
 | 208 | b4 bit 1, `412` b0 bit 5 | Brake pedal switch | bool | PSA-RE | Pressed 12 % of the time |
 | 208 | b4 bits 3-2 | Cruise / speed limiter status | enum | PSA-RE | |
-| 349 b3, 489 b0, 4FE b1, 563 b3 | | Gear lever P / R / D | enum | PSA-RE | D 91 %, P 7-9 %, R 1 % |
-| 3AD | b0, b3 | Electric parking brake state, force | enum | PSA-RE | Applied 6 % |
-| 512 / 5E2 | | Drive mode (Eco 93-95 %, Normal), energy mode ZEV | enum | PSA-RE | |
+| 349 b3, 489 b0, 4FE b1, 563 b3 | | Gear lever P / R / D | enum | confirmed (P/D) | D 91 %, P 7-9 %, R 1 %. trip2: `4FE` b1[7:5] 0=P, 3=D; `489` b0[3:0] follows ~40 ms later. `4FE` b2[6:4] = takeover request (2 = P, 5 = D) |
+| 3AD | b0, b3 | Electric parking brake state, force | enum | confirmed | Applied 6 %. trip2: b3[2:0] 1 = applied, 3 = releasing, 0 = released, 2 = applying (auto-release on accelerator in D, re-apply with the switch) |
+| 512 / 5E2 | | Drive mode (Eco 93-95 %, Normal), energy mode ZEV | enum | confirmed (`512`) | trip2: `512` b0[7:5] 0 = Normal, 2 = Eco; resets to Normal at power-off |
 | 5C1 | b5 / b6 | Front motor inverter / stator temperature | raw − 40 °C | PSA-RE | 12 → 24-27 / 12 → 32-35 °C. Our "5C1 temperatures" |
 | 5C1 | b7[7:3] | Motor HV voltage | V | PSA-RE | |
 | 522 | b0 | DC/DC converter temperature | raw − 40 °C | PSA-RE | 16 → 33 °C. Our "522 temperature" |
@@ -83,8 +86,10 @@ with a 4-bit checksum + 4-bit process counter.
 | 612 | b1 bits 7-6 | Turn indicator switch: left / right | enum | PSA-RE | |
 | 40E / 612 | | Low / high beam, DRL | bool | PSA-RE | DRL on, low beam off (daytime) |
 | 572 | b0 | Seat belts (driver / passenger), reverse engaged | enum | PSA-RE | |
-| 412 | b6 | Doors / boot status | | PSA-RE | All closed |
-| 512 | b1 | Locked from inside / outside | enum | PSA-RE | "Super-locked" 92 % while driving? |
+| 412 | b6[7:3] | Doors / boot status | | confirmed (driver door) | All closed. trip2: 1 = driver door open. Other doors not tested |
+| 412 | b0 bit 5 | Brake pedal switch | bool | confirmed | trip2: pressing it wakes the bus (~77 → ~1,570 frames/s) |
+| 572 | b0[3:2] | Powertrain state (ready) | enum | confirmed | trip2: 0 = off, 1 = starting (~0.9 s), 2 = ready |
+| 512 | b1 | Locked from inside / outside | enum | confirmed (inside) | "Super-locked" 92 % while driving? trip2: b1[4:3] = 2 after locking from inside, back to 0 on unlock. So 2 means locked from inside (PSA-RE's "super-locked" label is wrong here), which explains the 92 % during trip1 if the doors auto-lock while driving |
 | 3CE | b1, b4-5 | Evaporator air / probe temperature, heater water | °C | PSA-RE | 12-14 °C |
 | 56B / 5F2 / 59E | | Wipers, camera speed-sign reading (30/50/100), traffic-sign IDs | | PSA-RE | |
 | 3F2 | b4-b7 | Lane keeping assist state, requested yaw rate, column setpoint | | PSA-RE | |
@@ -111,3 +116,14 @@ with a 4-bit checksum + 4-bit process counter.
 - Outside temperature 14-15 °C.
 - Range on the dashboard: 186 km before, 172 km after.
 - 12 V (service) battery: 92% before, 84% after.
+
+## Ground truth from the user (trip2)
+
+Times in seconds since logger boot, taken from the capture. The user confirmed the actions, not the times.
+
+- 23.0: brake pedal pressed, car wakes; 25.2: ready.
+- 44.8: P → D. 51.2: drive mode button (Normal → Eco).
+- 60.2: accelerator touched in D, parking brake releases automatically; 64.9: parking brake switch pulled.
+- 69.8: D → P. 85.5: car switched off.
+- 138.3 / 166.6: driver door opened / closed. 170.1: locked from inside (confirmed); 177.3: unlocked (seen in the capture only).
+- Odometer 25,707 km; the car did not move.
