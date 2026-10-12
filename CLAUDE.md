@@ -95,15 +95,16 @@ older boards may differ).
 ## Architecture
 
 ```
-TWAI ISR (on_rx_done) ──► ring of rx_slot_t + counting semaphores ──► logger task ──► buffered writes ──► SD (FAT)
-                                                                       │
+TWAI ISR (on_rx_done) ──► ring of rx_slot_t + counting semaphores ──► logger loop (app_main, core 0)
+                                                                       │  formats text into 8 KB RAM chunks
+                                                                       ├──► free/full chunk queues ──► sd_writer task (core 1) ──► SD (FAT)
                                                                        └──► status_led (state + activity blink)
 ```
 
 | File | Role |
 |------|------|
 | [main/main.c](main/main.c) | `app_main`, TWAI setup (listen-only, 500 kbit/s), ISR to task handoff via a slot ring. |
-| [main/sd_logger.c](main/sd_logger.c) / [.h](main/sd_logger.h) | SD mount over SPI, a session directory per boot (`/sdcard/can-sniff/<random hex>/`), file writing, flush/fsync. |
+| [main/sd_logger.c](main/sd_logger.c) / [.h](main/sd_logger.h) | SD mount over SPI, a session directory per boot (`/sdcard/can-sniff/<random hex>/`), a pool of RAM chunks and the `sd_writer` task: the only code that touches the card after init. Log calls never block. |
 | [main/status_led.c](main/status_led.c) / [.h](main/status_led.h) | WS2812 status LED: `set`, timed `show_for` with a FreeRTOS one-shot timer, a "priority" flag that blocks other updates. |
 
 TWAI uses the **new v6 driver** (`esp_driver_twai`: `esp_twai.h`, `esp_twai_onchip.h`,
@@ -126,13 +127,19 @@ only. Record the frame's own fields: ID, extended flag, RTR flag, DLC and data.
 Each boot creates `/sdcard/can-sniff/<random hex>/` with:
 - `can.log`: every frame, candump format. Timestamps come from the TWAI driver
   (`timestamp_resolution_hz = 1 MHz`, captured in the ISR).
-- `events.csv` (`timestamp_us,event,value`): logger/bus status such as `bitrate`,
-  `rx_dropped_total` (written only when it changes) and `bus_state`.
+- `events.csv` (`timestamp_us,event,value`): logger/bus status such as `bitrate`, `bus_state`,
+  `rx_dropped_total` (RX ring full; written only when it changes), `sd_dropped_total` (all write
+  chunks waiting for the card; only when it changes) and `sd_stats` every second
+  (`write_max_us=… sync_max_us=… buffers_min_free=n/total`, maxima and minimum over that second).
 
-Throughput budget: 500 kbit/s saturated is about 4,000 frames/s, or roughly 150 KB/s of text.
-That's fine for SD over SPI if writes are batched (large `setvbuf` buffer, periodic `fflush` +
-`fsync` every ~1 s). Don't fsync per frame. Count dropped frames (ring full) and log the count
-periodically, so we know whether a capture is complete.
+Throughput budget: 500 kbit/s saturated is about 4,000 frames/s, or roughly 150 KB/s of text. The
+car's bus runs about 1,550 frames/s (~60 KB/s). Average bandwidth is not the problem; card latency is.
+SD cards sometimes block a write or fsync for over a second (trip1: median 830 ms per second, max
+1.9 s, while SD writes still ran in the RX loop, which lost 83% of frames). So the card is written
+only from `sd_writer`, which works through as many 8 KB chunks as the heap allows (up to 24) and
+fsyncs about once per second (postponed while a backlog is draining, at most 5 s). Never write
+to the card from the RX path, and don't fsync per frame. Count dropped frames (`rx_`/`sd_dropped_total`),
+so we know whether a capture is complete.
 
 ### Status LED
 

@@ -17,14 +17,25 @@ STALL_US = 50_000
 
 def health(frames: pd.DataFrame, events: pd.DataFrame) -> None:
     dur = (frames.t.iloc[-1] - frames.t.iloc[0]) / 1e6
-    dropped = events.loc[events.event == "rx_dropped_total", "value"].astype(int)
-    dropped = int(dropped.max()) if len(dropped) else 0
+    # rx: RX ring full (logger loop too slow). sd: write buffers full (card too slow; firmware after trip1 only).
+    dropped_by = {}
+    for kind in ("rx", "sd"):
+        values = events.loc[events.event == f"{kind}_dropped_total", "value"].astype(int)
+        dropped_by[kind] = int(values.max()) if len(values) else 0
+    dropped = sum(dropped_by.values())
     errors = events[events.event == "bus_errors"]
     gaps = np.diff(frames.t.to_numpy())
     stalls = gaps[gaps > STALL_US]
 
     print(f"frames logged   {len(frames):,} over {dur:.1f} s ({len(frames) / dur:.0f}/s)")
-    print(f"frames dropped  {dropped:,}  -> captured {len(frames) / (len(frames) + dropped) * 100:.1f}%")
+    print(f"frames dropped  {dropped:,} (rx {dropped_by['rx']:,}, sd {dropped_by['sd']:,})"
+          f"  -> captured {len(frames) / (len(frames) + dropped) * 100:.1f}%")
+    sd_stats = events[events.event == "sd_stats"]
+    if len(sd_stats):
+        fields = sd_stats.value.str.extract(r"write_max_us=(\d+) sync_max_us=(\d+) buffers_min_free=(\d+)/(\d+)")
+        fields = fields.astype(int)
+        print(f"sd slowest      write {fields[0].max() / 1e3:.0f} ms, fsync {fields[1].max() / 1e3:.0f} ms,"
+              f" fewest idle buffers {fields[2].min()}/{fields[3].iloc[0]}")
     print(f"bus error lines {len(errors)}" + (f", last: {errors.value.iloc[-1]}" if len(errors) else ""))
     print(f"logger stalls   {len(stalls)} (> {STALL_US // 1000} ms), {stalls.sum() / 1e6 / dur * 100:.1f}% of time")
     print(f"extended IDs    {int(frames.ext.sum())}, RTR {int(frames.rtr.sum())}")

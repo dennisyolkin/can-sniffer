@@ -23,7 +23,8 @@
 #define CAN_SE_GPIO GPIO_NUM_23
 #define CAN_BITRATE 500000
 
-#define RX_QUEUE_SIZE 64
+// Only has to cover scheduling hiccups of the logger loop: SD writes happen in their own task.
+#define RX_QUEUE_SIZE 256
 #define RX_IDLE_SAMPLES 1000
 
 #define HEARTBEAT_PERIOD_US (1000 * 1000)
@@ -216,6 +217,12 @@ static esp_err_t twai_start(void) {
     return twai_node_enable(can_node);
 }
 
+// ESP_ERR_NO_MEM means a line was dropped while the card was slow; sd_logger counts that. Anything else
+// means the card is full or gone and logging has stopped.
+static bool sd_alive(esp_err_t err) {
+    return err == ESP_OK || err == ESP_ERR_NO_MEM;
+}
+
 static esp_err_t log_uint_event(uint64_t timestamp_us, const char *event, uint32_t value) {
     char text[12];
     snprintf(text, sizeof(text), "%" PRIu32, value);
@@ -243,6 +250,29 @@ static esp_err_t log_bus_errors(uint64_t timestamp_us, uint32_t *total_reported)
         " ack=%" PRIu32,
         errors.total, errors.form, errors.stuff, errors.bit, errors.ack);
     return sd_logger_log_event(timestamp_us, "bus_errors", text);
+}
+
+// Write latencies show how long the card stalls; buffers_min_free how close that came to dropping frames.
+static esp_err_t log_sd_stats(uint64_t timestamp_us, uint32_t *dropped_reported) {
+    sd_logger_stats_t stats;
+    esp_err_t err = sd_logger_get_stats(&stats);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (stats.dropped_frames != *dropped_reported) {
+        *dropped_reported = stats.dropped_frames;
+        err = log_uint_event(timestamp_us, "sd_dropped_total", stats.dropped_frames);
+        if (!sd_alive(err)) {
+            return err;
+        }
+    }
+
+    char text[96];
+    snprintf(text, sizeof(text), "write_max_us=%" PRIu32 " sync_max_us=%" PRIu32 " buffers_min_free=%" PRIu32
+        "/%" PRIu32,
+        stats.write_max_us, stats.sync_max_us, stats.buffers_min_free, stats.buffer_count);
+    return sd_logger_log_event(timestamp_us, "sd_stats", text);
 }
 
 // One short blink per heartbeat; the color tells the state (see CLAUDE.md, "Status LED").
@@ -285,11 +315,12 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "Listening passively at %d bit/s", CAN_BITRATE);
 
-    bool sd_ok = log_uint_event(esp_timer_get_time(), "bitrate", CAN_BITRATE) == ESP_OK
-        && log_uint_event(esp_timer_get_time(), "rx_idle_low_per_1000", rx_low) == ESP_OK;
+    bool sd_ok = sd_alive(log_uint_event(esp_timer_get_time(), "bitrate", CAN_BITRATE))
+        && sd_alive(log_uint_event(esp_timer_get_time(), "rx_idle_low_per_1000", rx_low));
     uint32_t frames_since_heartbeat = 0;
     uint32_t dropped_reported = 0;
     uint32_t bus_errors_reported = 0;
+    uint32_t sd_dropped_reported = 0;
     uint32_t bus_errors_at_heartbeat = 0;
     twai_error_state_t state_reported = TWAI_ERROR_ACTIVE;
     int64_t next_heartbeat = esp_timer_get_time() + HEARTBEAT_PERIOD_US;
@@ -312,9 +343,7 @@ void app_main(void) {
 
             frames_since_heartbeat++;
             // After a write failure (card full or removed) stop writing; the LED reports it.
-            if (sd_ok && sd_logger_log_can(&entry) != ESP_OK) {
-                sd_ok = false;
-            }
+            sd_ok = sd_ok && sd_alive(sd_logger_log_can(&entry));
         }
 
         int64_t now = esp_timer_get_time();
@@ -326,17 +355,18 @@ void app_main(void) {
         if (sd_ok) {
             uint32_t dropped = rx_dropped;
             if (dropped != dropped_reported) {
-                sd_ok = log_uint_event(now, "rx_dropped_total", dropped) == ESP_OK;
+                sd_ok = sd_alive(log_uint_event(now, "rx_dropped_total", dropped));
                 dropped_reported = dropped;
             }
 
             twai_error_state_t state = bus_state;
             if (sd_ok && state != state_reported) {
-                sd_ok = sd_logger_log_event(now, "bus_state", bus_state_names[state]) == ESP_OK;
+                sd_ok = sd_alive(sd_logger_log_event(now, "bus_state", bus_state_names[state]));
                 state_reported = state;
             }
 
-            sd_ok = sd_ok && log_bus_errors(now, &bus_errors_reported) == ESP_OK;
+            sd_ok = sd_ok && sd_alive(log_bus_errors(now, &bus_errors_reported));
+            sd_ok = sd_ok && sd_alive(log_sd_stats(now, &sd_dropped_reported));
             sd_ok = sd_ok && sd_logger_flush() == ESP_OK;
         }
 
