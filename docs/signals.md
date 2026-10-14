@@ -126,7 +126,7 @@ clear lane lines, then without, plus a deliberate drift to one side to find the 
   the rest sleep, nobody ACKs it and it retransmits back to back (trip3: ~23,000 copies in 6.3 s). Treat
   such a burst as one frame in statistics.
 - The bus can stay half-awake for a while after use (trip3: ~820 frames/s for 24 s after plugging in) and
-  wakes fully on the brake pedal or a door.
+  wakes fully on the brake pedal (trip2).
 
 ## Not found yet
 
