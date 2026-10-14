@@ -13,6 +13,9 @@ Sources:
 - **trip2** (2026-10-12): ~3.6 min parked: wake with brake pedal, ready on, P → D, drive mode button, parking
   brake auto-release and re-apply, D → P, off, driver door open/close, lock from inside. 57.5% of frames
   logged (SD writer too slow), but every state change was caught. Action log under "Ground truth (trip2)".
+- **trip3** (2026-10-14): ~5 min, **100 % of frames logged** (no drops). Bus asleep twice, ready on, R, D,
+  ~12 m drive, off, every door and the boot, lock/unlock by key fob and keyless, lights from the fob.
+  Action log under "Ground truth (trip3)".
 - **PSA-RE** ([github.com/prototux/PSA-RE](https://github.com/prototux/PSA-RE)): community database of PSA
   frames in YAML. The ë-C4 is car code `C41`, architecture `AEE2010.electric` (child of `.ev`, `.full`).
   Decode a capture with `tools/psare.py <session> <PSA-RE checkout>`; it resolves the variant chain.
@@ -69,7 +72,8 @@ with a 4-bit checksum + 4-bit process counter.
 | 208 | b2 / b5 | Actual torque / torque without gearbox reduction | Nm (−100 offset) | PSA-RE | b5 was our "motor torque" |
 | 208 | b4 bit 1, `412` b0 bit 5 | Brake pedal switch | bool | PSA-RE | Pressed 12 % of the time |
 | 208 | b4 bits 3-2 | Cruise / speed limiter status | enum | PSA-RE | |
-| 349 b3, 489 b0, 4FE b1, 563 b3 | | Gear lever P / R / D | enum | confirmed (P/D) | D 91 %, P 7-9 %, R 1 %. trip2: `4FE` b1[7:5] 0=P, 3=D; `489` b0[3:0] follows ~40 ms later. `4FE` b2[6:4] = takeover request (2 = P, 5 = D) |
+| 349 b3, 489 b0, 4FE b1, 563 b3 | | Gear lever P / R / D | enum | confirmed | D 91 %, P 7-9 %, R 1 %. `4FE` b1[7:5] 0 = P, 1 = R, 3 = D (trip2/3); 2 appears for 0.1 s between P and R, probably N; `489` b0[3:0] follows ~40 ms later. `4FE` b2[6:4] = takeover request (2 = P, 5 = D) |
+| 572 / 412 | b0 bit 1 / b0 bit 2 | Reverse engaged | bool | confirmed | trip3: set ~0.6 s after the lever reaches R, cleared ~0.15 s after D |
 | 3AD | b0, b3 | Electric parking brake state, force | enum | confirmed | Applied 6 %. trip2: b3[2:0] 1 = applied, 3 = releasing, 0 = released, 2 = applying (auto-release on accelerator in D, re-apply with the switch) |
 | 512 / 5E2 | | Drive mode (Eco 93-95 %, Normal), energy mode ZEV | enum | confirmed (`512`) | trip2: `512` b0[7:5] 0 = Normal, 2 = Eco; resets to Normal at power-off |
 | 5C1 | b5 / b6 | Front motor inverter / stator temperature | raw − 40 °C | PSA-RE | 12 → 24-27 / 12 → 32-35 °C. Our "5C1 temperatures" |
@@ -85,16 +89,30 @@ with a 4-bit checksum + 4-bit process counter.
 | 468 | b3-b4 | DC/DC 12 V voltage setpoint | V | PSA-RE | 10.6 … 14.6 V |
 | 612 | b1 bits 7-6 | Turn indicator switch: left / right | enum | PSA-RE | |
 | 40E / 612 | | Low / high beam, DRL | bool | PSA-RE | DRL on, low beam off (daytime) |
+| 40E / 612 | `40E` b4 bit 3 / bit 1, `612` b1 bit 1 | Side lights / low beam command, low beam state | bool | confirmed (on) | trip3: key-fob lights button turns side + low beam on; they read on for exactly 30.0 s although the user turned them off sooner (see "Not found yet") |
+| 40E | b2 bit 6 | DRL command | bool | ours | Off while parked. trip3: on 3 s at every lock, 6 s at every unlock (fob and keyless), ~0.3 s before `512` changes: the lock/unlock light signature |
 | 572 | b0 | Seat belts (driver / passenger), reverse engaged | enum | PSA-RE | |
-| 412 | b6[7:3] | Doors / boot status | | confirmed (driver door) | All closed. trip2: 1 = driver door open. Other doors not tested |
+| 412 | b6[7:3] | Doors / boot open | bit field | confirmed | trip3: 1 = front left (driver), 2 = front right, 4 = rear left, 8 = rear right, 0x10 = boot |
 | 412 | b0 bit 5 | Brake pedal switch | bool | confirmed | trip2: pressing it wakes the bus (~77 → ~1,570 frames/s) |
 | 572 | b0[3:2] | Powertrain state (ready) | enum | confirmed | trip2: 0 = off, 1 = starting (~0.9 s), 2 = ready |
-| 512 | b1 | Locked from inside / outside | enum | confirmed (inside) | "Super-locked" 92 % while driving? trip2: b1[4:3] = 2 after locking from inside, back to 0 on unlock. So 2 means locked from inside (PSA-RE's "super-locked" label is wrong here), which explains the 92 % during trip1 if the doors auto-lock while driving |
+| 512 | b1 | Locked from inside / outside | enum | confirmed (inside) | "Super-locked" 92 % while driving? trip2: b1[4:3] = 2 after locking from inside, back to 0 on unlock. So 2 means locked from inside (PSA-RE's "super-locked" label is wrong here), which explains the 92 % during trip1 if the doors auto-lock while driving. trip3: key fob and keyless both give 2; b1[2:1] ("locked from outside") stayed 0, so the two aren't distinguishable here |
 | 3CE | b1, b4-5 | Evaporator air / probe temperature, heater water | °C | PSA-RE | 12-14 °C |
+| 3CE | b4[7:3], b4[2:0]+b5, b6+b7[7] | Evaporator setpoint (×0.5 °C), evaporator probe (×0.1 − 40 °C), blower airflow | | verified | trip3: 3 s after ready the setpoint goes 6.5 → 3.0 °C and the probe falls 14.4 → 0.5 °C until power-off: compressor running |
+| 348 | b3 | Refrigerant pressure (PSA-RE: COOLING_SYSTEM_PRESSURE_2) | raw | ours | 0 → 48 when the evaporator setpoint drops in trip3. Scale unknown |
 | 56B / 5F2 / 59E | | Wipers, camera speed-sign reading (30/50/100), traffic-sign IDs | | PSA-RE | |
 | 3F2 | b4-b7 | Lane keeping assist state, requested yaw rate, column setpoint | | PSA-RE | |
 
 ## Not found yet
+
+- **A/C on/off button**: in trip3 the A/C came on by itself at ready (`3CE`: blower and evaporator setpoint at
+  127-128 s). The user then switched it off and the A/C LED went out, but the evaporator kept cooling
+  (14.4 → 0.5 °C) until power-off, and no bit on this bus changed cleanly at the right time. The button
+  state is probably on the comfort bus. Why the evaporator kept cooling is open (battery cooling through
+  the same refrigerant loop?).
+- **Key-fob lights "off" press**: in trip3 the user pressed the lights button twice between locking and
+  unlocking, and the lights went off. On this bus the lights stay on for exactly 30.0 s (267.2-297.2 s, past
+  the unlock at 271.7) and the second press leaves no trace. So `40E`/`612` may be the light request
+  rather than the lamp state, or the press didn't reach this bus.
 
 - **Range (186 → 172 km)**: not in any field we searched, and PSA-RE has no range on HS1. Probably
   computed by the instrument cluster, or on another bus.
@@ -127,3 +145,26 @@ Times in seconds since logger boot, taken from the capture. The user confirmed t
 - 69.8: D → P. 85.5: car switched off.
 - 138.3 / 166.6: driver door opened / closed. 170.1: locked from inside (confirmed); 177.3: unlocked (seen in the capture only).
 - Odometer 25,707 km; the car did not move.
+
+## Ground truth from the user (trip3)
+
+Times in seconds since logger boot, from the capture. The user listed the actions and their order.
+
+- 0–24: bus already awake (~820 frames/s) from earlier; asleep at 24 (LED blue).
+- 34.9–41.3: one ECU woke alone and resent the same `782#5000000000000000` frame ~23,000 times (every 276 µs).
+  No other node was awake to acknowledge it, and our node can't (listen-only). The 16 bus errors logged
+  then (8 form + 8 bit) are its error frames until its TEC reached 128 (16 × 8) and it went error-passive.
+  This is car behaviour, but tools should treat those frames as one.
+- 123.0: bus wakes; 125.1 ready.
+- 144.9: P → R; 150.2: R → D; 154.5 drive mode Normal → Eco (separate switch, pressed by the user).
+- 157.0–158.2: parking brake auto-release; moving 159.3–175.5, max 5.9 km/h, **11.7 m** by wheel speeds
+  (user: a very short drive, 10-15 m is plausible).
+- 200.7: D → P, parking brake applied; 200.9: off.
+- Doors open/closed: front left 205.4–220.0, rear left 222.1–224.0, rear right 228.9–230.3,
+  front right 234.6–235.6, boot 245.9–249.9.
+- 257.4: locked with key fob. 267.2: lights on from the fob, then a second press turned them off (user);
+  the bus shows them off only at 297.2, a 30 s timer (see "Not found yet").
+  271.7: unlocked with fob. 280.0–281.3: driver door. 283.1: locked (keyless); 290.5: unlocked (keyless).
+  295.6: driver door opened; log ends at 306.3.
+- A/C: came on by itself at ready, switched off by the user (LED out); the switch-off is not visible on
+  this bus (see "Not found yet").
