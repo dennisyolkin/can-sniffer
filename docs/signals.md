@@ -24,7 +24,8 @@ Sources:
 
 The OBD pins 6/14 carry PSA's **HS1 (powertrain) bus**: 79 of our 87 IDs are defined in PSA-RE's
 `AEE2010.{electric,ev,full}/HS.HS1`, and the decoded values make sense. Not in PSA-RE:
-`302 352 40B 42B 44B 494 4A2 66B`.
+`302 352 40B 42B 44B 494 4A2 66B` (see "IDs not in PSA-RE"). Across trip1-3 we have seen 96 IDs; some only
+appear while the car sleeps, wakes or locks.
 
 87 IDs, all 11-bit, ~1,550 frames/s, no bus errors. Periods: 10 ms (`208 262 2F5 305 349 3CD`),
 20 ms (`2EB 302 30D 334 348 34D 3AD 40D`), 40 ms, 50 ms, 100 ms, ~1 s (5xx/7xx). Many frames end or start
@@ -101,6 +102,31 @@ with a 4-bit checksum + 4-bit process counter.
 | 348 | b3 | Refrigerant pressure (PSA-RE: COOLING_SYSTEM_PRESSURE_2) | raw | ours | 0 → 48 when the evaporator setpoint drops in trip3. Scale unknown |
 | 56B / 5F2 / 59E | | Wipers, camera speed-sign reading (30/50/100), traffic-sign IDs | | PSA-RE | |
 | 3F2 | b4-b7 | Lane keeping assist state, requested yaw rate, column setpoint | | PSA-RE | |
+
+## IDs not in PSA-RE
+
+Our own observations (trip1 for driving, trip3 for a complete parked capture). All **hypotheses**, none confirmed.
+
+| ID | Period, DLC | Behaviour | Best guess |
+|----|-------------|-----------|------------|
+| 302 | 20 ms, 7 | Constant while off. Driving: b1-b2 tracks `3AD` calibrated longitudinal acceleration (r = 0.93, ~16000 at rest); b5-b6 similar with less swing (0xEA60 = 60000 while off) | Acceleration / wheel torque request from the powertrain controller. Best lead |
+| 40B | 50 ms, 4, only while ready | b0 = 127 most of the time, 20-80 at speed; b1-b2 jumps between a few discrete levels | Front camera: lane detection quality or a range, 127 = nothing detected |
+| 42B / 44B | 50 ms, 8, only while ready | Identical layout. Parked: constant `7FFE 7FFE 7FE0 7F80` (looks invalid). Driving: signed 16-bit values near zero (b0-1, b2-3, ...), sometimes 0x8000 | Front camera lane lines, left (`42B`) / right (`44B`): offset, heading, curvature. Fits the lane keeping assist in `3F2` |
+| 4A2 | 100 ms, 2 | `0040` while awake; `0080` from 0.2 s before the bus sleeps until it wakes (trip3: 23.8 s, sleep at 24 s) | Network management: awake / ready to sleep (b1 bits 6/7) |
+| 352 | 100 ms, 2 | trip3: `FCF8` until 4.6 s after ready, then `1C6C` → `1E64` → `1A64`, kept after power-off | Unknown status word |
+| 494 | ~1.5 s, 8 | Almost constant (`05D0760000040000`); only b3 bit 3 and b4 bits 6/4 ever change | Configuration or version broadcast |
+| 66B | 5 frames, trip1 only | Around 24 s after the trip1 start; two alternating payloads with a page number in b0 high nibble | One-off message from an ECU at wake-up |
+
+To test: `302` with a few hard accelerations and brakes at noted times. `40B`/`42B`/`44B` on a road with
+clear lane lines, then without, plus a deliberate drift to one side to find the lateral offset.
+
+### Network management, seen in trip3
+
+- `782` (PSA-RE: SCDT_SUPERVISION) is each ECU's ~1 s network supervision frame. When one ECU wakes while
+  the rest sleep, nobody ACKs it and it retransmits back to back (trip3: ~23,000 copies in 6.3 s). Treat
+  such a burst as one frame in statistics.
+- The bus can stay half-awake for a while after use (trip3: ~820 frames/s for 24 s after plugging in) and
+  wakes fully on the brake pedal or a door.
 
 ## Not found yet
 
