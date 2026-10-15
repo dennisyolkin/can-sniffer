@@ -1,0 +1,17 @@
+# Settings the firmware depends on. They apply only to options not yet in sdkconfig: after changing this file,
+# run `rm sdkconfig && idf.py -B build build`.
+
+# T-CAN485: 2 MB flash; one large app partition for Wi-Fi + web server (partitions.csv).
+CONFIG_ESPTOOLPY_FLASHSIZE_2MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# One tick = 10 ms; see CLAUDE.md before using vTaskDelay anywhere near the RX path.
+CONFIG_FREERTOS_HZ=100
+
+# Live view: WebSocket on the HTTP server (main/web_server.c).
+CONFIG_HTTPD_WS_SUPPORT=y
+
+# Core 0 belongs to the logger loop and the TWAI ISR; the network stack goes to core 1.
+CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_1=y
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU1=y

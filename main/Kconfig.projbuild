@@ -1,0 +1,32 @@
+menu "Live view Wi-Fi"
+
+    config LIVE_WIFI_SSID
+        string "SSID"
+        default "can-sniffer"
+        help
+            Network name of the board's access point. Max 32 characters.
+
+    config LIVE_WIFI_PASSWORD
+        string "Password"
+        default ""
+        help
+            WPA2 passphrase, 8 to 63 characters. Empty makes the network open.
+            Set it in sdkconfig.secrets (git-ignored), not in sdkconfig.defaults.
+
+    config LIVE_WIFI_CHANNEL
+        int "Channel"
+        range 1 13
+        default 1
+
+    config LIVE_WIFI_MAX_CONNECTIONS
+        int "Max connected stations"
+        range 1 10
+        default 3
+
+    config LIVE_WIFI_MDNS_HOSTNAME
+        string "mDNS hostname"
+        default "can-sniffer"
+        help
+            Clients on the AP can reach the board as <hostname>.local (also always at 192.168.4.1).
+
+endmenu

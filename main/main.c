@@ -14,8 +14,11 @@
 #include "esp_twai.h"
 #include "esp_twai_onchip.h"
 
+#include "live_data.h"
 #include "sd_logger.h"
 #include "status_led.h"
+#include "web_server.h"
+#include "wifi_ap.h"
 
 #define CAN_TX_GPIO GPIO_NUM_27
 #define CAN_RX_GPIO GPIO_NUM_26
@@ -125,7 +128,8 @@ static bool IRAM_ATTR on_error(
     return false;
 }
 
-// Never returns. Leaves the LED solid red so the failure is visible without a laptop.
+// Never returns. Leaves the LED solid red so the failure is visible without a laptop. Only for failures that make
+// the board useless; without an SD card or Wi-Fi it still does the rest.
 static void halt_with_error(const char *what, esp_err_t err) {
     ESP_LOGE(TAG, "%s failed: %s", what, esp_err_to_name(err));
     status_led_set(STATUS_LED_RED);
@@ -217,8 +221,20 @@ static esp_err_t twai_start(void) {
     return twai_node_enable(can_node);
 }
 
+// Per-session state: events.csv counts drops and errors from the start of its own session.
+typedef struct {
+    char name[SD_LOGGER_SESSION_NAME_MAX];
+    uint32_t rx_dropped_base;
+    uint32_t rx_dropped_reported;
+    bus_error_counts_t errors_base;
+    uint32_t errors_reported;
+    uint32_t sd_dropped_reported;
+    twai_error_state_t state_reported;
+    uint32_t marks;
+} session_t;
+
 // ESP_ERR_NO_MEM means a line was dropped while the card was slow; sd_logger counts that. Anything else
-// means the card is full or gone and logging has stopped.
+// means the card is full or gone and the session has stopped writing.
 static bool sd_alive(esp_err_t err) {
     return err == ESP_OK || err == ESP_ERR_NO_MEM;
 }
@@ -229,40 +245,40 @@ static esp_err_t log_uint_event(uint64_t timestamp_us, const char *event, uint32
     return sd_logger_log_event(timestamp_us, event, text);
 }
 
-// Logs the bus error counters if any error happened since the last call.
-static esp_err_t log_bus_errors(uint64_t timestamp_us, uint32_t *total_reported) {
-    // Copied field by field without locking: the ISR may update it mid-copy, which at worst
-    // makes one line slightly inconsistent. Good enough for diagnostics.
-    bus_error_counts_t errors = {
+// Copied field by field without locking: the ISR may update it mid-copy, which at worst makes one line slightly
+// inconsistent. Good enough for diagnostics.
+static bus_error_counts_t read_bus_errors(void) {
+    return (bus_error_counts_t) {
         .total = bus_errors.total,
         .form = bus_errors.form,
         .stuff = bus_errors.stuff,
         .bit = bus_errors.bit,
         .ack = bus_errors.ack,
     };
-    if (errors.total == *total_reported) {
+}
+
+// Logs the session's bus error counters if any error happened since the last call.
+static esp_err_t log_bus_errors(uint64_t timestamp_us, session_t *session) {
+    bus_error_counts_t now = read_bus_errors();
+    const bus_error_counts_t *base = &session->errors_base;
+    uint32_t total = now.total - base->total;
+    if (total == session->errors_reported) {
         return ESP_OK;
     }
-    *total_reported = errors.total;
+    session->errors_reported = total;
 
     char text[96];
     snprintf(text, sizeof(text), "total=%" PRIu32 " form=%" PRIu32 " stuff=%" PRIu32 " bit=%" PRIu32
         " ack=%" PRIu32,
-        errors.total, errors.form, errors.stuff, errors.bit, errors.ack);
+        total, now.form - base->form, now.stuff - base->stuff, now.bit - base->bit, now.ack - base->ack);
     return sd_logger_log_event(timestamp_us, "bus_errors", text);
 }
 
 // Write latencies show how long the card stalls; buffers_min_free how close that came to dropping frames.
-static esp_err_t log_sd_stats(uint64_t timestamp_us, uint32_t *dropped_reported) {
-    sd_logger_stats_t stats;
-    esp_err_t err = sd_logger_get_stats(&stats);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    if (stats.dropped_frames != *dropped_reported) {
-        *dropped_reported = stats.dropped_frames;
-        err = log_uint_event(timestamp_us, "sd_dropped_total", stats.dropped_frames);
+static esp_err_t log_sd_stats(uint64_t timestamp_us, const sd_logger_stats_t *stats, session_t *session) {
+    if (stats->dropped_frames != session->sd_dropped_reported) {
+        session->sd_dropped_reported = stats->dropped_frames;
+        esp_err_t err = log_uint_event(timestamp_us, "sd_dropped_total", stats->dropped_frames);
         if (!sd_alive(err)) {
             return err;
         }
@@ -271,21 +287,93 @@ static esp_err_t log_sd_stats(uint64_t timestamp_us, uint32_t *dropped_reported)
     char text[96];
     snprintf(text, sizeof(text), "write_max_us=%" PRIu32 " sync_max_us=%" PRIu32 " buffers_min_free=%" PRIu32
         "/%" PRIu32,
-        stats.write_max_us, stats.sync_max_us, stats.buffers_min_free, stats.buffer_count);
+        stats->write_max_us, stats->sync_max_us, stats->buffers_min_free, stats->buffer_count);
     return sd_logger_log_event(timestamp_us, "sd_stats", text);
 }
 
+// Once per second while recording. Returns false when the card stopped accepting data.
+static bool log_session_events(uint64_t now, const sd_logger_stats_t *stats, session_t *session) {
+    uint32_t dropped = rx_dropped - session->rx_dropped_base;
+    bool ok = true;
+    if (dropped != session->rx_dropped_reported) {
+        ok = sd_alive(log_uint_event(now, "rx_dropped_total", dropped));
+        session->rx_dropped_reported = dropped;
+    }
+
+    twai_error_state_t state = bus_state;
+    if (ok && state != session->state_reported) {
+        ok = sd_alive(sd_logger_log_event(now, "bus_state", bus_state_names[state]));
+        session->state_reported = state;
+    }
+
+    ok = ok && sd_alive(log_bus_errors(now, session));
+    ok = ok && sd_alive(log_sd_stats(now, stats, session));
+    return ok && sd_logger_flush() == ESP_OK;
+}
+
+// Session facts that otherwise appear only once per boot, so each session's events.csv stands on its own.
+static esp_err_t start_session(session_t *session, uint32_t rx_idle_low) {
+    char name[SD_LOGGER_SESSION_NAME_MAX];
+    esp_err_t err = sd_logger_start(name);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Cannot start recording: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    *session = (session_t) {
+        .rx_dropped_base = rx_dropped,
+        .errors_base = read_bus_errors(),
+        .state_reported = bus_state,
+    };
+    strlcpy(session->name, name, sizeof(session->name));
+    // Restarts the per-second maxima, so the first sd_stats line covers this session only.
+    sd_logger_stats_t stats;
+    sd_logger_get_stats(&stats);
+    uint64_t now = esp_timer_get_time();
+    log_uint_event(now, "bitrate", CAN_BITRATE);
+    log_uint_event(now, "rx_idle_low_per_1000", rx_idle_low);
+    sd_logger_log_event(now, "bus_state", bus_state_names[session->state_reported]);
+    return ESP_OK;
+}
+
+// Marks from the page are logged with the time of the press, so a line can come slightly out of order.
+static void log_marks(session_t *session, bool writable) {
+    live_mark_t mark;
+    while (live_data_take_mark(&mark)) {
+        if (!writable) {
+            continue;
+        }
+        char value[12 + LIVE_DATA_MARK_LABEL_MAX];
+        snprintf(value, sizeof(value), "%" PRIu32 " %s", session->marks + 1, mark.label);
+        if (sd_logger_log_event(mark.timestamp_us, "mark", value) == ESP_OK) {
+            session->marks++;
+        }
+    }
+}
+
+static live_recorder_state_t recorder_state(bool sd_present) {
+    if (!sd_present) {
+        return LIVE_RECORDER_NO_CARD;
+    }
+    if (!sd_logger_recording()) {
+        return LIVE_RECORDER_OFF;
+    }
+    return sd_logger_failed() ? LIVE_RECORDER_FAILED : LIVE_RECORDER_ON;
+}
+
 // One short blink per heartbeat; the color tells the state (see CLAUDE.md, "Status LED").
-static void heartbeat_blink(bool sd_ok, uint32_t frames, uint32_t errors) {
+static void heartbeat_blink(live_recorder_state_t recorder, uint32_t frames, uint32_t errors) {
     status_led_color_t color;
-    if (!sd_ok) {
+    if (recorder == LIVE_RECORDER_FAILED) {
         color = STATUS_LED_RED;
     } else if (errors > 0) {
         color = STATUS_LED_YELLOW;
-    } else if (frames > 0) {
+    } else if (frames == 0) {
+        color = STATUS_LED_BLUE;
+    } else if (recorder == LIVE_RECORDER_ON) {
         color = STATUS_LED_GREEN;
     } else {
-        color = STATUS_LED_BLUE;
+        color = STATUS_LED_CYAN;
     }
     // Losing a blink is harmless, so the result is ignored.
     (void) status_led_show_for(color, HEARTBEAT_BLINK_MS, false);
@@ -294,9 +382,22 @@ static void heartbeat_blink(bool sd_ok, uint32_t frames, uint32_t errors) {
 void app_main(void) {
     ESP_ERROR_CHECK(status_led_init());
 
-    esp_err_t err = sd_logger_init();
+    esp_err_t err = live_data_init();
     if (err != ESP_OK) {
-        halt_with_error("SD logger init", err);
+        halt_with_error("Live data init", err);
+    }
+
+    // Before Wi-Fi, so the write buffers get their memory first. Without a card the live view still works.
+    bool sd_present = sd_logger_init() == ESP_OK;
+
+    err = wifi_ap_start();
+    if (err == ESP_OK) {
+        err = web_server_start();
+    }
+    // Without the page nobody can switch recording on, so record from the start instead.
+    bool auto_record = err != ESP_OK;
+    if (auto_record) {
+        ESP_LOGE(TAG, "Web UI unavailable (%s), recording from boot", esp_err_to_name(err));
     }
 
     err = transceiver_init();
@@ -315,14 +416,14 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "Listening passively at %d bit/s", CAN_BITRATE);
 
-    bool sd_ok = sd_alive(log_uint_event(esp_timer_get_time(), "bitrate", CAN_BITRATE))
-        && sd_alive(log_uint_event(esp_timer_get_time(), "rx_idle_low_per_1000", rx_low));
+    session_t session = {0};
+    if (auto_record && sd_present) {
+        start_session(&session, rx_low);
+    }
+
+    uint32_t frames_total = 0;
     uint32_t frames_since_heartbeat = 0;
-    uint32_t dropped_reported = 0;
-    uint32_t bus_errors_reported = 0;
-    uint32_t sd_dropped_reported = 0;
     uint32_t bus_errors_at_heartbeat = 0;
-    twai_error_state_t state_reported = TWAI_ERROR_ACTIVE;
     int64_t next_heartbeat = esp_timer_get_time() + HEARTBEAT_PERIOD_US;
 
     while (true) {
@@ -337,13 +438,14 @@ void app_main(void) {
             };
             memcpy(entry.data, frame->buffer, sizeof(entry.data));
 
-            // Free the slot before the (possibly slow) SD write.
+            // Free the slot before the rest of the work.
             rx_read = (rx_read + 1) % RX_QUEUE_SIZE;
             xSemaphoreGive(rx_free);
 
             frames_since_heartbeat++;
-            // After a write failure (card full or removed) stop writing; the LED reports it.
-            sd_ok = sd_ok && sd_alive(sd_logger_log_can(&entry));
+            live_data_update(&entry);
+            // Returns at once when not recording or after a write failure; the LED and the page report that.
+            sd_logger_log_can(&entry);
         }
 
         int64_t now = esp_timer_get_time();
@@ -352,26 +454,51 @@ void app_main(void) {
         }
         next_heartbeat = now + HEARTBEAT_PERIOD_US;
 
-        if (sd_ok) {
-            uint32_t dropped = rx_dropped;
-            if (dropped != dropped_reported) {
-                sd_ok = sd_alive(log_uint_event(now, "rx_dropped_total", dropped));
-                dropped_reported = dropped;
+        bool want_recording;
+        if (live_data_take_recording_request(&want_recording) && sd_present) {
+            if (want_recording && !sd_logger_recording()) {
+                start_session(&session, rx_low);
+            } else if (!want_recording && sd_logger_recording()) {
+                if (sd_logger_stop() != ESP_OK) {
+                    ESP_LOGE(TAG, "Cannot stop recording");
+                }
             }
+        }
 
-            twai_error_state_t state = bus_state;
-            if (sd_ok && state != state_reported) {
-                sd_ok = sd_alive(sd_logger_log_event(now, "bus_state", bus_state_names[state]));
-                state_reported = state;
-            }
+        bool writable = sd_logger_recording() && !sd_logger_failed();
+        log_marks(&session, writable);
 
-            sd_ok = sd_ok && sd_alive(log_bus_errors(now, &bus_errors_reported));
-            sd_ok = sd_ok && sd_alive(log_sd_stats(now, &sd_dropped_reported));
-            sd_ok = sd_ok && sd_logger_flush() == ESP_OK;
+        sd_logger_stats_t stats = {0};
+        if (sd_present) {
+            sd_logger_get_stats(&stats);
+        }
+        if (writable) {
+            log_session_events(now, &stats, &session);
         }
 
         uint32_t bus_errors_total = bus_errors.total;
-        heartbeat_blink(sd_ok, frames_since_heartbeat, bus_errors_total - bus_errors_at_heartbeat);
+        uint32_t bus_errors_per_s = bus_errors_total - bus_errors_at_heartbeat;
+        frames_total += frames_since_heartbeat;
+        live_recorder_state_t recorder = recorder_state(sd_present);
+
+        live_status_t status = {
+            .frames_per_s = frames_since_heartbeat,
+            .frames_total = frames_total,
+            .rx_dropped_total = rx_dropped,
+            .bus_errors_total = bus_errors_total,
+            .bus_errors_per_s = bus_errors_per_s,
+            .recorder = recorder,
+            .sd_dropped = stats.dropped_frames,
+            .buffers_min_free = stats.buffers_min_free,
+            .buffer_count = stats.buffer_count,
+            .marks = session.marks,
+        };
+        if (sd_logger_recording()) {
+            strlcpy(status.session, session.name, sizeof(status.session));
+        }
+        live_data_set_status(&status);
+
+        heartbeat_blink(recorder, frames_since_heartbeat, bus_errors_per_s);
         bus_errors_at_heartbeat = bus_errors_total;
         frames_since_heartbeat = 0;
     }

@@ -15,6 +15,7 @@ typedef struct {
 #define STATUS_LED_GREEN   ((status_led_color_t){0, 255, 0})
 #define STATUS_LED_BLUE    ((status_led_color_t){0, 0, 255})
 #define STATUS_LED_YELLOW  ((status_led_color_t){255, 255, 0})
+#define STATUS_LED_CYAN    ((status_led_color_t){0, 255, 255})
 #define STATUS_LED_WHITE   ((status_led_color_t){255, 255, 255})
 
 esp_err_t status_led_init(void);

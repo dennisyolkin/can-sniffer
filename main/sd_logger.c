@@ -35,13 +35,12 @@
 #define SD_MAX_TRANSFER_SIZE 4096
 
 // Text is collected in RAM chunks and written by a separate task, so a slow card never stalls
-// the RX path. SD cards occasionally block a write or fsync for well over a second (trip1 saw up
-// to 1.9 s); at ~60 KB/s of text that needs ~120 KB of buffering to ride out without losing frames.
+// the RX path. With SDSPI's MISO wait off, trip3 never had more than 4 chunks in use (slowest
+// write 89 ms). 8 chunks hold about a second of the car's ~60 KB/s, and leave the heap to Wi-Fi.
 #define CHUNK_SIZE       (8 * 1024)
-#define CHUNK_COUNT_MAX  24
-#define CHUNK_COUNT_MIN  4
-// Heap kept free for FATFS, stdio and the rest of the firmware after the chunk pool is allocated.
-#define HEAP_RESERVE     (48 * 1024)
+#define CHUNK_COUNT      8
+// Every chunk can be queued at once, plus session open/close commands.
+#define WRITER_QUEUE_LEN (CHUNK_COUNT + 4)
 
 // Longest can.log line: "(18446744073709.551615) can0 1FFFFFFF#0011223344556677\n" is 56 bytes.
 #define CAN_LINE_MAX     64
@@ -71,24 +70,44 @@ typedef struct {
     char *data;
 } chunk_t;
 
+typedef enum {
+    WRITER_OPEN,
+    WRITER_DATA,
+    WRITER_CLOSE,
+} writer_op_t;
+
+// Session commands travel in the same queue as the data, so the writer sees them in the order they happened.
+typedef struct {
+    writer_op_t op;
+    uint32_t session;
+    chunk_t *chunk;                         // WRITER_DATA
+    char name[SD_LOGGER_SESSION_NAME_MAX];  // WRITER_OPEN
+} writer_msg_t;
+
 static sdmmc_card_t *card;
-static int fds[LOG_FILE_COUNT] = {-1, -1};
-static char session_dir[64];
 
 // Chunks circulate between the logger (fills them) and the writer (writes and returns them).
-// Both queues hold every chunk at most once, so sends never block or fail.
-static chunk_t chunks[CHUNK_COUNT_MAX];
+// The free queue holds every chunk at most once, so sends never block or fail.
+static chunk_t chunks[CHUNK_COUNT];
 static unsigned chunk_count;
 static QueueHandle_t free_queue;
-static QueueHandle_t full_queue;
+static QueueHandle_t writer_queue;
 
 // Owned by the logger side.
 static chunk_t *current[LOG_FILE_COUNT];
 static uint32_t dropped_frames;
 static uint32_t buffers_min_free;
+static uint32_t boot_id;
+static uint32_t session_count;
+static uint32_t session;  // Number of the open session; sessions count from 1.
+static bool recording;
 
-// Set by the writer on the first failed write or fsync; it then discards everything.
-static volatile bool write_failed;
+// Owned by the writer.
+static int fds[LOG_FILE_COUNT] = {-1, -1};
+
+// Set by the writer to the session whose write, fsync or file creation failed; it then discards that session's
+// data. A session number rather than a flag, so a late failure of a closed session can't mark the next one.
+static volatile uint32_t failed_session;
 
 // Updated by the writer, read and reset by sd_logger_get_stats.
 static portMUX_TYPE stats_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -109,20 +128,14 @@ static void free_chunks(void) {
         vQueueDelete(free_queue);
         free_queue = NULL;
     }
-    if (full_queue != NULL) {
-        vQueueDelete(full_queue);
-        full_queue = NULL;
+    if (writer_queue != NULL) {
+        vQueueDelete(writer_queue);
+        writer_queue = NULL;
     }
 }
 
+// Only for a failed init: the writer task doesn't exist yet and no files are open.
 static void cleanup(void) {
-    for (unsigned i = 0; i < LOG_FILE_COUNT; i++) {
-        if (fds[i] >= 0) {
-            close(fds[i]);
-            fds[i] = -1;
-        }
-    }
-
     free_chunks();
 
     if (card != NULL) {
@@ -138,9 +151,9 @@ static void cleanup(void) {
     initialized = false;
 }
 
-static esp_err_t open_file(log_file_t file, const char *name) {
+static esp_err_t open_file(const char *dir, log_file_t file, const char *name) {
     char path[96];
-    snprintf(path, sizeof(path), "%s/%s", session_dir, name);
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
 
     fds[file] = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0664);
     if (fds[file] < 0) {
@@ -162,75 +175,69 @@ static esp_err_t write_all(int fd, const char *data, size_t len) {
     return ESP_OK;
 }
 
-static esp_err_t create_session(void) {
+static void close_files(void) {
+    for (unsigned i = 0; i < LOG_FILE_COUNT; i++) {
+        if (fds[i] >= 0) {
+            close(fds[i]);
+            fds[i] = -1;
+        }
+    }
+}
+
+static esp_err_t open_session(const char *name) {
     if (mkdir(SD_SESSIONS_DIR, 0775) != 0 && access(SD_SESSIONS_DIR, F_OK) != 0) {
         ESP_LOGE(TAG, "Cannot create sessions directory");
         return ESP_FAIL;
     }
 
-    for (int attempt = 0; attempt < 10; attempt++) {
-        uint32_t id = esp_random();
-
-        snprintf(session_dir, sizeof(session_dir), SD_SESSIONS_DIR "/%08" PRIx32, id);
-
-        if (mkdir(session_dir, 0775) == 0) {
-            ESP_LOGI(TAG, "Created session: %s", session_dir);
-            break;
-        }
-
-        session_dir[0] = '\0';
-    }
-
-    if (session_dir[0] == '\0') {
-        ESP_LOGE(TAG, "Failed to create unique session directory");
+    char dir[64];
+    snprintf(dir, sizeof(dir), SD_SESSIONS_DIR "/%s", name);
+    if (mkdir(dir, 0775) != 0) {
+        ESP_LOGE(TAG, "Cannot create %s", dir);
         return ESP_FAIL;
     }
 
-    esp_err_t err = open_file(LOG_FILE_CAN, "can.log");
-    if (err != ESP_OK) {
-        return err;
+    esp_err_t err = open_file(dir, LOG_FILE_CAN, "can.log");
+    if (err == ESP_OK) {
+        err = open_file(dir, LOG_FILE_EVENTS, "events.csv");
     }
-    err = open_file(LOG_FILE_EVENTS, "events.csv");
     if (err != ESP_OK) {
+        close_files();
         return err;
     }
 
     static const char header[] = "timestamp_us,event,value\n";
     if (write_all(fds[LOG_FILE_EVENTS], header, sizeof(header) - 1) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to write CSV header");
+        close_files();
         return ESP_FAIL;
     }
 
+    ESP_LOGI(TAG, "Session %s", dir);
     return ESP_OK;
 }
 
-// Takes as many chunks as the heap allows, up to the max. DMA-capable memory lets the SD driver
-// send whole sectors straight from the chunk instead of copying through a bounce buffer.
+// DMA-capable memory lets the SD driver send whole sectors straight from the chunk instead of copying through a
+// bounce buffer. Allocated once at boot, before Wi-Fi, so the pool can't be squeezed out later.
 static esp_err_t allocate_chunks(void) {
-    free_queue = xQueueCreate(CHUNK_COUNT_MAX, sizeof(chunk_t *));
-    full_queue = xQueueCreate(CHUNK_COUNT_MAX, sizeof(chunk_t *));
-    if (free_queue == NULL || full_queue == NULL) {
+    free_queue = xQueueCreate(CHUNK_COUNT, sizeof(chunk_t *));
+    writer_queue = xQueueCreate(WRITER_QUEUE_LEN, sizeof(writer_msg_t));
+    if (free_queue == NULL || writer_queue == NULL) {
         return ESP_ERR_NO_MEM;
     }
 
-    while (chunk_count < CHUNK_COUNT_MAX
-        && heap_caps_get_free_size(MALLOC_CAP_DMA) >= HEAP_RESERVE + CHUNK_SIZE) {
+    while (chunk_count < CHUNK_COUNT) {
         chunk_t *chunk = &chunks[chunk_count];
         chunk->data = heap_caps_malloc(CHUNK_SIZE, MALLOC_CAP_DMA);
         if (chunk->data == NULL) {
-            break;
+            ESP_LOGE(TAG, "Only %u write buffers fit in the heap", chunk_count);
+            return ESP_ERR_NO_MEM;
         }
         chunk_count++;
         xQueueSend(free_queue, &chunk, 0);
     }
 
-    if (chunk_count < CHUNK_COUNT_MIN) {
-        ESP_LOGE(TAG, "Only %u write buffers fit in the heap", chunk_count);
-        return ESP_ERR_NO_MEM;
-    }
-
     buffers_min_free = chunk_count;
-    ESP_LOGI(TAG, "%u write buffers of %d bytes", chunk_count, CHUNK_SIZE);
     return ESP_OK;
 }
 
@@ -243,23 +250,42 @@ static void record_max(uint32_t *max, int64_t start_us) {
     taskEXIT_CRITICAL(&stats_lock);
 }
 
-static void sync_files(bool dirty[LOG_FILE_COUNT]) {
+static void sync_files(bool dirty[LOG_FILE_COUNT], uint32_t open_session_id) {
     for (unsigned i = 0; i < LOG_FILE_COUNT; i++) {
-        if (!dirty[i] || write_failed) {
+        if (!dirty[i]) {
+            continue;
+        }
+        dirty[i] = false;
+        if (fds[i] < 0 || failed_session == open_session_id) {
             continue;
         }
         int64_t start = esp_timer_get_time();
         if (fsync(fds[i]) != 0) {
-            write_failed = true;
+            failed_session = open_session_id;
         }
         record_max(&sync_max_us, start);
-        dirty[i] = false;
     }
+}
+
+static void write_chunk(const writer_msg_t *msg, bool dirty[LOG_FILE_COUNT], uint32_t open_session_id) {
+    chunk_t *chunk = msg->chunk;
+    // Data of a session that failed or never opened is dropped; the logger learns of it via sd_logger_failed().
+    if (msg->session == open_session_id && fds[chunk->file] >= 0 && failed_session != open_session_id) {
+        int64_t start = esp_timer_get_time();
+        if (write_all(fds[chunk->file], chunk->data, chunk->len) != ESP_OK) {
+            failed_session = open_session_id;
+        }
+        record_max(&write_max_us, start);
+        dirty[chunk->file] = true;
+    }
+    chunk->len = 0;
+    xQueueSend(free_queue, &chunk, 0);
 }
 
 // The only code touching the card after init, so FATFS calls never block the logger.
 static void writer_task(void *arg) {
     bool dirty[LOG_FILE_COUNT] = {false};
+    uint32_t open_session_id = 0;
     int64_t last_sync = esp_timer_get_time();
 
     while (true) {
@@ -269,33 +295,43 @@ static void writer_task(void *arg) {
             wait = left_us > 0 ? pdMS_TO_TICKS(left_us / 1000) + 1 : 0;
         }
 
-        chunk_t *chunk;
-        if (xQueueReceive(full_queue, &chunk, wait) == pdTRUE) {
-            if (!write_failed) {
-                int64_t start = esp_timer_get_time();
-                if (write_all(fds[chunk->file], chunk->data, chunk->len) != ESP_OK) {
-                    write_failed = true;
+        writer_msg_t msg;
+        if (xQueueReceive(writer_queue, &msg, wait) == pdTRUE) {
+            switch (msg.op) {
+            case WRITER_OPEN:
+                close_files();
+                open_session_id = msg.session;
+                if (open_session(msg.name) != ESP_OK) {
+                    failed_session = msg.session;
                 }
-                record_max(&write_max_us, start);
-                dirty[chunk->file] = true;
+                last_sync = esp_timer_get_time();
+                break;
+            case WRITER_DATA:
+                write_chunk(&msg, dirty, open_session_id);
+                break;
+            case WRITER_CLOSE:
+                sync_files(dirty, open_session_id);
+                close_files();
+                open_session_id = 0;
+                break;
             }
-            chunk->len = 0;
-            xQueueSend(free_queue, &chunk, 0);
         }
 
         int64_t since_sync = esp_timer_get_time() - last_sync;
-        bool backlog = uxQueueMessagesWaiting(full_queue) > 0;
+        bool backlog = uxQueueMessagesWaiting(writer_queue) > 0;
         if (since_sync >= SYNC_MAX_PERIOD_US || (since_sync >= SYNC_PERIOD_US && !backlog)) {
-            sync_files(dirty);
+            sync_files(dirty, open_session_id);
             last_sync = esp_timer_get_time();
         }
     }
 }
 
+// The writer queue has room for every chunk, so this never fails.
 static void hand_over(log_file_t file) {
     chunk_t *chunk = current[file];
     if (chunk != NULL && chunk->len > 0) {
-        xQueueSend(full_queue, &chunk, 0);
+        writer_msg_t msg = {.op = WRITER_DATA, .session = session, .chunk = chunk};
+        xQueueSend(writer_queue, &msg, 0);
         current[file] = NULL;
     }
 }
@@ -406,10 +442,7 @@ esp_err_t sd_logger_init(void) {
         return err;
     }
 
-    err = create_session();
-    if (err == ESP_OK) {
-        err = allocate_chunks();
-    }
+    err = allocate_chunks();
     if (err == ESP_OK
         && xTaskCreatePinnedToCore(writer_task, "sd_writer", WRITER_STACK_SIZE, NULL, WRITER_PRIORITY, NULL,
             WRITER_CORE) != pdPASS) {
@@ -420,17 +453,63 @@ esp_err_t sd_logger_init(void) {
         return err;
     }
 
+    boot_id = esp_random();
     initialized = true;
 
-    ESP_LOGI(TAG, "SDcard logger initialized");
+    ESP_LOGI(TAG, "SD card ready, %u write buffers of %d bytes", chunk_count, CHUNK_SIZE);
     return ESP_OK;
 }
 
-esp_err_t sd_logger_log_can(const can_log_frame_t *frame) {
-    if (!initialized) {
+esp_err_t sd_logger_start(char name[SD_LOGGER_SESSION_NAME_MAX]) {
+    if (!initialized || recording) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (write_failed) {
+
+    writer_msg_t msg = {.op = WRITER_OPEN, .session = session + 1};
+    // Directories don't carry a usable date (no RTC), so the boot id groups a boot's sessions and the
+    // sequence orders them.
+    snprintf(msg.name, sizeof(msg.name), "%08" PRIx32 "-%02" PRIu32, boot_id, session_count + 1);
+    if (xQueueSend(writer_queue, &msg, 0) != pdTRUE) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    session_count++;
+    session = msg.session;
+    recording = true;
+    dropped_frames = 0;
+    buffers_min_free = uxQueueMessagesWaiting(free_queue);
+    strlcpy(name, msg.name, SD_LOGGER_SESSION_NAME_MAX);
+    return ESP_OK;
+}
+
+esp_err_t sd_logger_stop(void) {
+    if (!recording) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    hand_over(LOG_FILE_CAN);
+    hand_over(LOG_FILE_EVENTS);
+    writer_msg_t msg = {.op = WRITER_CLOSE, .session = session};
+    if (xQueueSend(writer_queue, &msg, 0) != pdTRUE) {
+        return ESP_ERR_NO_MEM;
+    }
+    recording = false;
+    return ESP_OK;
+}
+
+bool sd_logger_recording(void) {
+    return recording;
+}
+
+bool sd_logger_failed(void) {
+    return recording && failed_session == session;
+}
+
+esp_err_t sd_logger_log_can(const can_log_frame_t *frame) {
+    if (!recording) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (sd_logger_failed()) {
         return ESP_FAIL;
     }
 
@@ -471,10 +550,10 @@ esp_err_t sd_logger_log_can(const can_log_frame_t *frame) {
 }
 
 esp_err_t sd_logger_log_event(uint64_t timestamp_us, const char *event, const char *value) {
-    if (!initialized) {
+    if (!recording) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (write_failed) {
+    if (sd_logger_failed()) {
         return ESP_FAIL;
     }
 
@@ -494,13 +573,13 @@ esp_err_t sd_logger_log_event(uint64_t timestamp_us, const char *event, const ch
 }
 
 esp_err_t sd_logger_flush(void) {
-    if (!initialized) {
+    if (!recording) {
         return ESP_ERR_INVALID_STATE;
     }
 
     hand_over(LOG_FILE_CAN);
     hand_over(LOG_FILE_EVENTS);
-    return write_failed ? ESP_FAIL : ESP_OK;
+    return sd_logger_failed() ? ESP_FAIL : ESP_OK;
 }
 
 esp_err_t sd_logger_get_stats(sd_logger_stats_t *stats) {

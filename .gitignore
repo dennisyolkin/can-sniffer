@@ -83,3 +83,6 @@ Desktop.ini
 
 # Editor settings (machine-specific paths)
 .vscode/
+
+# Wi-Fi credentials (see sdkconfig.secrets.example)
+sdkconfig.secrets

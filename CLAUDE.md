@@ -8,12 +8,17 @@ Standalone CAN bus logger built on a LilyGO T-CAN485 (ESP32) plugged into the ca
 - **Later:** get diagnostics the car doesn't normally show (traction battery health, cell
   voltages, temperatures, SoH), and look for hidden features/settings.
 
-### Phase 1 (current): passive logger
+### Phase 1 (current): passive logger + live view
 
-- Dump **every** frame on the bus to the SD card for offline analysis on the laptop.
+- The board runs a Wi-Fi access point and serves a page that shows decoded car data on the phone in real time
+  (design and protocol: [docs/live-view.md](docs/live-view.md)).
+- Recording **every** frame to the SD card for offline analysis is a switch on that page, **off at every boot**.
+  Each on/off cycle is its own session. A "Mark" button writes timestamped labels into the session.
 - **Listen-only mode.** The node must never transmit or ACK anything.
-- Runs **without a laptop**: powered from OBD2, starts logging on boot, no user interaction.
-- **Silent console.** No `printf`/logging in the normal data path. Status goes through the RGB LED.
+- Runs **without a laptop**: powered from OBD2, no user interaction needed. If the web UI can't start, it records
+  from boot instead.
+- **Silent console.** No `printf`/logging in the normal data path. Status goes through the RGB LED and the page.
+- The board is unplugged when the car is not in use, so power draw while parked is not a concern.
 
 ### Later phases (not started)
 
@@ -89,22 +94,28 @@ older boards may differ).
   may or may not appear on other OBD pins. Treat all of this as hypotheses to confirm from the
   captures.
 - Pin 16 is always powered. The board will drain the 12 V auxiliary battery if left plugged in
-  for days. Power can also disappear at any moment, so the log format and flushing strategy must
+  for days (the user unplugs it). Power can also disappear at any moment, so the log format and flushing strategy must
   handle sudden power loss.
 
 ## Architecture
 
 ```
 TWAI ISR (on_rx_done) ──► ring of rx_slot_t + counting semaphores ──► logger loop (app_main, core 0)
-                                                                       │  formats text into 8 KB RAM chunks
-                                                                       ├──► free/full chunk queues ──► sd_writer task (core 1) ──► SD (FAT)
+                                                                       ├──► live_data table (latest frame per ID) ◄── web_server (core 1) ──► phone
+                                                                       │      ▲ recording requests, marks ───────────────┘
+                                                                       │  while recording: formats text into 8 KB RAM chunks
+                                                                       ├──► free chunk queue / writer queue ──► sd_writer task (core 1) ──► SD (FAT)
                                                                        └──► status_led (state + activity blink)
 ```
 
 | File | Role |
 |------|------|
-| [main/main.c](main/main.c) | `app_main`, TWAI setup (listen-only, 500 kbit/s), ISR to task handoff via a slot ring. |
-| [main/sd_logger.c](main/sd_logger.c) / [.h](main/sd_logger.h) | SD mount over SPI, a session directory per boot (`/sdcard/can-sniff/<random hex>/`), a pool of RAM chunks and the `sd_writer` task: the only code that touches the card after init. Log calls never block. |
+| [main/main.c](main/main.c) | `app_main`, TWAI setup (listen-only, 500 kbit/s), ISR to task handoff via a slot ring, the logger loop: live table per frame, SD while recording, once per second requests, marks, events, status and LED. |
+| [main/sd_logger.c](main/sd_logger.c) / [.h](main/sd_logger.h) | SD mount over SPI, a fixed pool of 8 RAM chunks, sessions on demand (`sd_logger_start`/`_stop`) and the `sd_writer` task: the only code that touches the card after init. Session open/close travel through the writer queue with the data, so they stay in order. Log calls never block. |
+| [main/live_data.c](main/live_data.c) / [.h](main/live_data.h) | State shared between the logger loop and the web server: latest frame per ID (per page for muxed `334`/`3F4`), status snapshot, recording request, mark queue. Short spinlock sections only. |
+| [main/wifi_ap.c](main/wifi_ap.c) / [.h](main/wifi_ap.h) | NVS, netif, SoftAP (menuconfig → Live view Wi-Fi; password in `sdkconfig.secrets`), mDNS `can-sniffer.local`. |
+| [main/web_server.c](main/web_server.c) / [.h](main/web_server.h) | httpd on core 1: `GET /` serves [main/web/index.html](main/web/index.html) (gzipped at build time), `/ws` pushes the frame table (binary, 5 Hz) and status (JSON, 1 Hz) and takes `rec on`/`rec off`/`mark <label>`. |
+| [main/web/index.html](main/web/index.html) | The page: no frameworks. Its signal table (JSON, PSA-RE bit notation) is the decoding for the live view; check it with `tools/check_page_signals.py`. |
 | [main/status_led.c](main/status_led.c) / [.h](main/status_led.h) | WS2812 status LED: `set`, timed `show_for` with a FreeRTOS one-shot timer, a "priority" flag that blocks other updates. |
 
 TWAI uses the **new v6 driver** (`esp_driver_twai`: `esp_twai.h`, `esp_twai_onchip.h`,
@@ -124,36 +135,40 @@ captures open directly in can-utils, SavvyCAN, python-can and similar tools. Tim
 `esp_timer_get_time()` (µs since boot). There is no RTC, so sessions are ordered by directory
 only. Record the frame's own fields: ID, extended flag, RTR flag, DLC and data.
 
-Each boot creates `/sdcard/can-sniff/<random hex>/` with:
+Each recording (REC switched on) creates `/sdcard/can-sniff/<boot id>-<nn>/`: the boot id is random hex per boot,
+`nn` counts the sessions of that boot. It contains:
 - `can.log`: every frame, candump format. Timestamps come from the TWAI driver
   (`timestamp_resolution_hz = 1 MHz`, captured in the ISR).
 - `events.csv` (`timestamp_us,event,value`): logger/bus status such as `bitrate`, `bus_state`,
   `rx_dropped_total` (RX ring full; written only when it changes), `sd_dropped_total` (all write
   chunks waiting for the card; only when it changes) and `sd_stats` every second
   (`write_max_us=… sync_max_us=… buffers_min_free=n/total`, maxima and minimum over that second).
+  Counters (`*_dropped_total`, `bus_errors`) start from zero in each session. `mark` lines (`<n> <label>`) come
+  from the page's Mark button, stamped with the time of the press, so they can be up to a second out of order.
 
 Throughput budget: 500 kbit/s saturated is about 4,000 frames/s, or roughly 150 KB/s of text. The
 car's bus runs about 1,550 frames/s (~60 KB/s). Average bandwidth is not the problem; card latency is.
 SD cards sometimes block a write or fsync for over a second (trip1: median 830 ms per second, max
 1.9 s, while SD writes still ran in the RX loop, which lost 83% of frames). So the card is written
-only from `sd_writer`, which works through as many 8 KB chunks as the heap allows (up to 24) and
-fsyncs about once per second (postponed while a backlog is draining, at most 5 s). Never write
+only from `sd_writer`, which works through a fixed pool of 8 × 8 KB chunks (trip3, after the MISO fix, never had
+more than 4 in use; slowest write 89 ms) and fsyncs about once per second (postponed while a backlog is draining, at most 5 s). Never write
 to the card from the RX path, and don't fsync per frame. Count dropped frames (`rx_`/`sd_dropped_total`),
 so we know whether a capture is complete.
 
 ### Status LED
 
-The LED is the only UI. Keep the meaning of each color documented here when it changes. While
-running, the logger loop flushes to SD once per second and blinks once (50 ms); the color is the
-state.
+The LED is the UI when no phone is connected. Keep the meaning of each color documented here when it changes.
+The logger loop blinks once per second (50 ms); the color is the state. A missing SD card is not fatal: the live
+view works, and the page shows "No SD".
 
 | LED | Meaning |
 |-----|---------|
-| Solid red | Fatal init error (SD missing or mount failed, TWAI init failed). Device halts; no reboot loop. |
-| Red blink | SD write or flush failed (card full or removed). Logging has stopped. |
+| Solid red | Fatal init error (TWAI init failed). Device halts; no reboot loop. |
+| Red blink | Recording failed (card full or removed). Switch REC off and on to retry. |
 | Yellow blink | Bus errors (form/stuff/...) in the last second: wiring or bitrate problem. |
-| Green blink | Frames received in the last second. |
-| Blue blink | Running, no frames in the last second. |
+| Green blink | Frames received, recording. |
+| Cyan blink | Frames received, not recording. |
+| Blue blink | No frames in the last second. |
 
 ## Build, flash and monitor
 
@@ -161,14 +176,21 @@ ESP-IDF lives at `~/.espressif/v6.1/esp-idf`, installed with EIM. Target `esp32`
 
 ```sh
 source ~/.espressif/tools/activate_idf_v6.1.sh   # not esp-idf/export.sh (no python_env there)
-idf.py build
-idf.py -p /dev/tty.usbserial-595D0130391 flash monitor   # Ctrl-] to exit monitor
-idf.py menuconfig
+idf.py -B build build
+idf.py -B build -p /dev/tty.usbserial-595D0130391 flash monitor   # Ctrl-] to exit monitor
+idf.py -B build menuconfig
 ```
 
-- `sdkconfig` is git-ignored. Any config that matters (log level, FATFS options, tick rate) goes
-  in **`sdkconfig.defaults`**, which doesn't exist yet. Create it when the first such setting is
-  needed.
+- Pass `-B build`: `CMakePresets.json` (used by the VS Code extension) otherwise makes `idf.py` configure into a
+  broken `${sourceDir}/build/default` directory.
+- `sdkconfig` is git-ignored. Any config that matters goes in **`sdkconfig.defaults`** (flash size and partition
+  table, tick rate, WebSocket support, Wi-Fi/lwIP on core 1). Defaults only apply to options not yet in
+  `sdkconfig`: after changing it, `rm sdkconfig` and rebuild.
+- Wi-Fi credentials: `sdkconfig.secrets` (git-ignored, template `sdkconfig.secrets.example`), added as a second
+  defaults file by the top-level `CMakeLists.txt`.
+- [partitions.csv](partitions.csv): one ~1.9 MB factory app (the app is ~1 MB with Wi-Fi; the 1 MB default doesn't
+  fit). No OTA.
+- The phone joins the `can-sniffer` network and opens `http://192.168.4.1/` (or `http://can-sniffer.local/`).
 - `CONFIG_FREERTOS_HZ=100`, so one tick is 10 ms. Never add `vTaskDelay` to the RX path;
   `vTaskDelay(1)` alone would cap throughput at about 100 frames/s.
 - Dependencies come from the component manager (`main/idf_component.yml`, `led_strip ^3`).
@@ -176,6 +198,9 @@ idf.py menuconfig
 - clangd uses `build/compile_commands.json`. Build once before relying on diagnostics.
 - There are no host tests. Verification is on hardware. When changing the TWAI or SD path,
   describe what to observe (LED, files on the card) rather than claiming it works.
+- The page can be developed without the car: `tools/live_replay.py` serves it and replays a capture over the
+  same WebSocket protocol (`uv run --project tools tools/live_replay.py ~/tmp/trip3 --start 150`, then
+  http://localhost:8080/). The page is re-read on every request.
 
 ## Code conventions
 
@@ -200,6 +225,8 @@ Captures are analyzed on the laptop. If helper scripts are added, put them under
 
 - Run with `uv run --project tools tools/<script>.py <session_dir> ...` (deps in `tools/pyproject.toml`).
   `canlog.py` parses `can.log` and caches it as `can.parquet` in the session directory.
+- `check_page_signals.py` decodes a capture with the live page's signal table (first/last/min/max per signal);
+  run it after changing that table. `live_replay.py` replays a capture to the page (see Build).
 - `inventory.py` (health + per-ID table), `bytestats.py` (per-byte classes), `plot.py` (fields over time,
   to PNG), `correlate.py` (rank fields against a reference), `trends.py` (slowly rising/falling fields).
 - `psare.py` decodes a capture with [PSA-RE](https://github.com/prototux/PSA-RE) frame definitions (needs a local

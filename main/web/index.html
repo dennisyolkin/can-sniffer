@@ -1,0 +1,834 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e1116">
+<title>ë-C4 live</title>
+<!-- Empty inline icon: stops the browser from requesting /favicon.ico, which would just 404. -->
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0e1116; --panel: #171b22; --line: #2a313c; --text: #e8ecf1; --muted: #8a94a3;
+    --accent: #4da3ff; --good: #3fb950; --warn: #d29922; --bad: #f85149; --cyan: #39c5cf;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f8; --panel: #fff; --line: #d8dde3; --text: #1b1f24; --muted: #66707c;
+      --accent: #0969da; --good: #1a7f37; --warn: #9a6700; --bad: #cf222e; --cyan: #0b7f8a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: .45rem .7rem; }
+  button:disabled { opacity: .4; cursor: default; }
+
+  header {
+    position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--line);
+    padding: .5rem max(1rem, env(safe-area-inset-left)) .4rem;
+  }
+  .bar { display: flex; align-items: center; gap: .6rem; max-width: 760px; margin: 0 auto; }
+  .bar .info { flex: 1; min-width: 0; color: var(--muted); font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dot { width: .65rem; height: .65rem; border-radius: 50%; background: var(--bad); flex: none; }
+  .dot.ok { background: var(--good); }
+  .dot.wait { background: var(--warn); }
+  #rec { font-weight: 600; min-width: 5.5rem; }
+  #rec.on { background: var(--bad); border-color: var(--bad); color: #fff; }
+  #rec.failed { border-color: var(--bad); color: var(--bad); }
+  #mark-btn.open { border-color: var(--accent); color: var(--accent); }
+
+  #mark-panel { max-width: 760px; margin: .5rem auto 0; }
+  #mark-panel .presets { display: flex; flex-wrap: wrap; gap: .4rem; }
+  #mark-panel form { display: flex; gap: .4rem; margin-top: .4rem; }
+  #mark-panel input { flex: 1; min-width: 0; padding: .45rem .6rem; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  #mark-log { color: var(--muted); font-size: .85rem; margin: .35rem 0 0; min-height: 1.2em; }
+
+  nav { display: flex; gap: .3rem; max-width: 760px; margin: .45rem auto 0; }
+  nav button { flex: 1; border: 0; background: none; color: var(--muted); border-bottom: 2px solid transparent; border-radius: 0; padding: .35rem 0; }
+  nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+
+  main { max-width: 760px; margin: 0 auto; padding: .75rem 1rem 2rem; }
+  section[hidden] { display: none; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: .6rem; margin-bottom: .6rem; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .55rem .7rem; min-width: 0; }
+  .tile.wide { grid-column: span 2; }
+  .tile.full { grid-column: 1 / -1; }
+  .lbl { color: var(--muted); font-size: .8rem; display: flex; align-items: center; gap: .35rem; }
+  .val { font-size: 1.55rem; font-weight: 600; white-space: nowrap; }
+  .val.big { font-size: 3rem; line-height: 1.1; }
+  .val small { font-size: .55em; font-weight: 400; color: var(--muted); margin-left: .2em; }
+  .sub { color: var(--muted); font-size: .85rem; margin-top: .15rem; }
+  .stale { opacity: .35; }
+  .chips { display: flex; gap: .35rem; flex-wrap: wrap; margin-top: .35rem; }
+  .chip { border: 1px solid var(--line); border-radius: 999px; padding: .05rem .55rem; font-size: .85rem; }
+  .chip.hl { border-color: var(--accent); color: var(--accent); }
+  h2 { font-size: .85rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 1rem 0 .4rem; }
+
+  /* Confidence of a decoded value, see docs/signals.md. */
+  .c { width: .45rem; height: .45rem; border-radius: 50%; flex: none; }
+  .c.confirmed, .c.verified { background: var(--good); }
+  .c.psa-re { background: var(--muted); }
+  .c.ours { background: var(--warn); }
+  .c.doubtful { background: var(--bad); }
+
+  .meter { height: .45rem; border-radius: 99px; background: var(--line); overflow: hidden; margin-top: .35rem; }
+  .meter > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .meter.good > div { background: var(--good); }
+  .meter.bad > div { background: var(--bad); }
+
+  svg { display: block; width: 100%; }
+  .spark { height: 48px; margin-top: .3rem; }
+  .spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+  .spark line { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+
+  #cells { height: 120px; margin-top: .4rem; }
+  #cells rect { fill: var(--accent); }
+  #cells rect.min { fill: var(--bad); }
+  #cells rect.max { fill: var(--good); }
+  #temps { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; margin-top: .4rem; }
+  #temps div { text-align: center; font-size: .8rem; padding: .3rem 0; border-radius: 4px; background: var(--line); }
+
+  #doors { max-width: 160px; margin: .3rem auto 0; }
+  #doors rect { fill: var(--line); stroke: var(--muted); stroke-width: 1; }
+  #doors rect.body { fill: none; }
+  #doors rect.open { fill: var(--warn); stroke: var(--warn); }
+
+  .filters { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin: .2rem 0 .5rem; }
+  .filters input[type=search] { width: 7rem; padding: .35rem .5rem; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  .filters label { color: var(--muted); font-size: .85rem; }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; }
+  th { text-align: left; color: var(--muted); font-weight: 400; padding: .2rem .4rem; border-bottom: 1px solid var(--line); }
+  td { padding: .15rem .4rem; white-space: nowrap; }
+  td.num { text-align: right; }
+  td.bytes span { padding: 0 .12rem; border-radius: 3px; transition: background .6s; }
+  td.bytes span.chg { background: var(--warn); color: #000; transition: none; }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <span id="conn" class="dot" title="Connection"></span>
+    <span class="info" id="info">Connecting…</span>
+    <button id="mark-btn" disabled>Mark</button>
+    <button id="rec" disabled>REC</button>
+  </div>
+  <div id="mark-panel" hidden>
+    <div class="presets">
+      <button data-label="A/C">A/C</button>
+      <button data-label="door">Door</button>
+      <button data-label="lock">Lock</button>
+      <button data-label="unlock">Unlock</button>
+      <button data-label="lights">Lights</button>
+      <button data-label="button">Button</button>
+      <button data-label="accelerate">Accel</button>
+      <button data-label="brake">Brake</button>
+    </div>
+    <form id="mark-form">
+      <input id="mark-text" placeholder="Label" maxlength="31" autocomplete="off">
+      <button>Mark</button>
+    </form>
+    <p id="mark-log"></p>
+  </div>
+  <nav>
+    <button data-tab="drive" class="active">Drive</button>
+    <button data-tab="battery">Battery</button>
+    <button data-tab="car">Car</button>
+    <button data-tab="raw">Raw</button>
+  </nav>
+</header>
+
+<main>
+<section id="tab-drive">
+  <div class="grid">
+    <div class="tile wide">
+      <div class="lbl">Speed</div>
+      <div class="val big"><span data-k="speed"></span><small>km/h</small></div>
+      <div class="chips">
+        <span class="chip hl" data-k="gear"></span>
+        <span class="chip" data-k="mode"></span>
+        <span class="chip" data-k="ready"></span>
+      </div>
+    </div>
+    <div class="tile wide">
+      <div class="lbl">State of charge</div>
+      <div class="val big"><span data-k="soc"></span><small>%</small></div>
+      <div class="meter good"><div id="soc-bar"></div></div>
+      <div class="sub">BMS <span data-k="soc_bms"></span> % · <span data-k="ah"></span> Ah</div>
+    </div>
+    <div class="tile full" data-conf="ours" title="−dAh/dt × V from 563 and 5C3, 3 s window">
+      <div class="lbl">Power (estimate)</div>
+      <div class="val"><span id="power"></span><small>kW</small></div>
+      <svg class="spark" id="power-spark" viewBox="0 0 60 40" preserveAspectRatio="none">
+        <line x1="0" x2="60" y1="20" y2="20"></line><polyline></polyline>
+      </svg>
+      <div class="sub">last 60 s, regen below the line</div>
+    </div>
+    <div class="tile">
+      <div class="lbl">Accelerator</div>
+      <div class="val"><span data-k="accel"></span><small>%</small></div>
+      <div class="meter"><div id="accel-bar"></div></div>
+    </div>
+    <div class="tile">
+      <div class="lbl">Brake pressure</div>
+      <div class="val"><span data-k="brake"></span><small>bar</small></div>
+      <div class="meter bad"><div id="brake-bar"></div></div>
+    </div>
+    <div class="tile"><div class="lbl">Torque</div><div class="val"><span data-k="torque"></span><small>Nm</small></div></div>
+    <div class="tile"><div class="lbl">Steering</div><div class="val"><span data-k="steer"></span><small>°</small></div></div>
+    <div class="tile"><div class="lbl">Lateral accel.</div><div class="val"><span data-k="lat_acc"></span><small>m/s²</small></div></div>
+    <div class="tile"><div class="lbl">Camera speed limit</div><div class="val"><span data-k="speed_limit"></span><small>km/h</small></div></div>
+    <div class="tile"><div class="lbl">Limiter</div><div class="val"><span data-k="limiter"></span></div></div>
+    <div class="tile"><div class="lbl">Parking brake</div><div class="val"><span data-k="epb"></span></div></div>
+    <div class="tile"><div class="lbl">Odometer</div><div class="val"><span data-k="odo"></span><small>km</small></div></div>
+  </div>
+</section>
+
+<section id="tab-battery" hidden>
+  <div class="grid">
+    <div class="tile"><div class="lbl">SoH capacity</div><div class="val"><span data-k="soh_cap"></span><small>%</small></div></div>
+    <div class="tile"><div class="lbl">SoH resistance</div><div class="val"><span data-k="soh_res"></span><small>%</small></div></div>
+    <div class="tile"><div class="lbl">HV voltage</div><div class="val"><span data-k="hv_v"></span><small>V</small></div></div>
+    <div class="tile"><div class="lbl">Remaining</div><div class="val"><span data-k="ah"></span><small>Ah</small></div></div>
+    <div class="tile"><div class="lbl">Cell min</div><div class="val"><span data-k="cell_min"></span><small>V</small></div><div class="sub">cell <span data-k="cell_min_n"></span></div></div>
+    <div class="tile"><div class="lbl">Cell max</div><div class="val"><span data-k="cell_max"></span><small>V</small></div><div class="sub">cell <span data-k="cell_max_n"></span></div></div>
+    <div class="tile"><div class="lbl">Insulation</div><div class="val"><span data-k="insulation"></span><small>kΩ</small></div></div>
+    <div class="tile"><div class="lbl">Lifetime charge</div><div class="val"><span data-k="life_ah"></span><small>Ah</small></div></div>
+    <div class="tile"><div class="lbl">Main relay cycles</div><div class="val"><span data-k="relay"></span></div></div>
+    <div class="tile"><div class="lbl">DC-charge relay cycles</div><div class="val"><span data-k="dc_relay"></span></div></div>
+    <div class="tile full" data-conf="psa-re">
+      <div class="lbl">108 cell voltages (334)</div>
+      <div class="sub" id="cells-sum">waiting for all pages…</div>
+      <svg id="cells" viewBox="0 0 108 40" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="tile full" data-conf="verified">
+      <div class="lbl">Temperature probes, °C (3F4)</div>
+      <div class="sub">average <span data-k="t_avg"></span> °C · min <span data-k="t_min"></span> °C · <span id="temps-sum"></span></div>
+      <div id="temps"></div>
+    </div>
+  </div>
+</section>
+
+<section id="tab-car" hidden>
+  <h2>Temperatures</h2>
+  <div class="grid">
+    <div class="tile"><div class="lbl">Outside</div><div class="val"><span data-k="t_out"></span><small>°C</small></div></div>
+    <div class="tile"><div class="lbl">Inverter</div><div class="val"><span data-k="t_inv"></span><small>°C</small></div></div>
+    <div class="tile"><div class="lbl">Motor stator</div><div class="val"><span data-k="t_stator"></span><small>°C</small></div></div>
+    <div class="tile"><div class="lbl">DC/DC</div><div class="val"><span data-k="t_dcdc"></span><small>°C</small></div></div>
+    <div class="tile"><div class="lbl">Evaporator</div><div class="val"><span data-k="t_evap"></span><small>°C</small></div></div>
+    <div class="tile"><div class="lbl">Heater water</div><div class="val"><span data-k="t_heater"></span><small>°C</small></div></div>
+  </div>
+  <h2>12 V</h2>
+  <div class="grid">
+    <div class="tile"><div class="lbl">12 V battery</div><div class="val"><span data-k="v12"></span><small>V</small></div></div>
+    <div class="tile"><div class="lbl">DC/DC setpoint</div><div class="val"><span data-k="dcdc_set"></span><small>V</small></div></div>
+  </div>
+  <h2>Body</h2>
+  <div class="grid">
+    <div class="tile wide">
+      <div class="lbl">Doors</div>
+      <svg id="doors" viewBox="0 0 100 180">
+        <rect class="body" x="20" y="10" width="60" height="160" rx="18"></rect>
+        <rect id="door-1" x="6" y="52" width="12" height="38" rx="3"></rect>
+        <rect id="door-2" x="82" y="52" width="12" height="38" rx="3"></rect>
+        <rect id="door-4" x="6" y="94" width="12" height="38" rx="3"></rect>
+        <rect id="door-8" x="82" y="94" width="12" height="38" rx="3"></rect>
+        <rect id="door-16" x="28" y="160" width="44" height="14" rx="3"></rect>
+      </svg>
+      <div class="sub" style="text-align:center"><span id="doors-text"></span></div>
+    </div>
+    <div class="tile"><div class="lbl">Locks</div><div class="val"><span data-k="locked"></span></div></div>
+    <div class="tile"><div class="lbl">Driver belt</div><div class="val"><span data-k="belt_d"></span></div></div>
+    <div class="tile"><div class="lbl">Passenger belt</div><div class="val"><span data-k="belt_p"></span></div></div>
+  </div>
+  <h2>Lights</h2>
+  <div class="grid">
+    <div class="tile"><div class="lbl">DRL</div><div class="val"><span data-k="drl"></span></div></div>
+    <div class="tile"><div class="lbl">Side lights</div><div class="val"><span data-k="side"></span></div></div>
+    <div class="tile"><div class="lbl">Low beam command</div><div class="val"><span data-k="low_cmd"></span></div></div>
+    <div class="tile"><div class="lbl">Low beam state</div><div class="val"><span data-k="low_state"></span></div></div>
+  </div>
+</section>
+
+<section id="tab-raw" hidden>
+  <h2>Logger</h2>
+  <div class="grid">
+    <div class="tile wide"><div class="lbl">Recording</div><div class="val" id="l-rec"></div><div class="sub" id="l-session"></div></div>
+    <div class="tile"><div class="lbl">Uptime</div><div class="val" id="l-uptime"></div></div>
+    <div class="tile"><div class="lbl">Frames/s</div><div class="val" id="l-fps"></div><div class="sub" id="l-frames"></div></div>
+    <div class="tile"><div class="lbl">Dropped (RX / SD)</div><div class="val" id="l-dropped"></div></div>
+    <div class="tile"><div class="lbl">SD buffers min free</div><div class="val" id="l-buffers"></div></div>
+    <div class="tile"><div class="lbl">Bus errors</div><div class="val" id="l-errors"></div></div>
+    <div class="tile"><div class="lbl">Heap free / min</div><div class="val" id="l-heap"></div></div>
+  </div>
+  <h2>Frames</h2>
+  <div class="filters">
+    <input type="search" id="raw-filter" placeholder="ID…" autocomplete="off">
+    <label><input type="checkbox" id="raw-changing"> changed in last 10 s</label>
+  </div>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>ID</th><th>pg</th><th class="num">ms</th><th class="num">count</th><th>data</th></tr></thead>
+      <tbody id="raw-body"></tbody>
+    </table>
+  </div>
+</section>
+</main>
+
+<!--
+  Signal table, in PSA-RE bit notation: "<byte>.<bit>" with bytes from 1 and bits 7 (MSB) to 0, ranges read
+  big-endian. physical = raw * f + o; raw values in inv mean "invalid". t: u (default), s (signed), enum, bool.
+  conf follows docs/signals.md. groups are muxed IDs: "page" is the selector (the firmware keys its table by
+  it, see main/live_data.c), "fields" the values per page. tools/check_page_signals.py decodes a capture with this.
+-->
+<script type="application/json" id="signals">
+{
+  "signals": [
+    {"k": "speed", "id": "38D", "bits": "1.7-2.0", "f": 0.01, "inv": 65535, "dec": 0, "conf": "verified"},
+    {"k": "soc", "id": "3A8", "bits": "5.7-6.6", "f": 0.125, "inv": 1023, "dec": 1, "conf": "confirmed"},
+    {"k": "soc_bms", "id": "5C3", "bits": "3.1-4.0", "f": 0.1, "inv": 1023, "dec": 1, "conf": "confirmed"},
+    {"k": "hv_v", "id": "5C3", "bits": "1.7-2.5", "f": 0.25, "inv": 2047, "dec": 0, "conf": "psa-re"},
+    {"k": "ah", "id": "563", "bits": "5.7-7.4", "f": 0.001, "inv": [0, 1048575], "dec": 2, "conf": "psa-re"},
+    {"k": "gear", "id": "4FE", "bits": "2.7-2.5", "t": "enum", "enum": {"0": "P", "1": "R", "2": "N", "3": "D"}, "conf": "confirmed"},
+    {"k": "mode", "id": "512", "bits": "1.7-1.5", "t": "enum", "enum": {"0": "Normal", "1": "Sport", "2": "Eco", "3": "Snow", "5": "Init"}, "conf": "confirmed"},
+    {"k": "ready", "id": "572", "bits": "1.3-1.2", "t": "enum", "enum": {"0": "Off", "1": "Starting", "2": "Ready", "3": "Stopped"}, "conf": "confirmed"},
+    {"k": "accel", "id": "208", "bits": "4.7-4.0", "f": 0.5, "inv": 255, "dec": 0, "conf": "verified"},
+    {"k": "brake", "id": "3CD", "bits": "6.7-7.4", "f": 0.1, "o": -55, "inv": 4095, "dec": 0, "conf": "psa-re"},
+    {"k": "torque", "id": "208", "bits": "3.7-3.0", "f": 2, "o": -100, "inv": 255, "dec": 0, "conf": "psa-re"},
+    {"k": "steer", "id": "305", "bits": "1.7-2.0", "t": "s", "f": 0.1, "inv": 32767, "dec": 0, "conf": "verified"},
+    {"k": "lat_acc", "id": "3CD", "bits": "1.7-2.0", "t": "s", "f": 0.05, "inv": 32767, "dec": 1, "conf": "verified"},
+    {"k": "speed_limit", "id": "5F2", "bits": "3.7-3.0", "inv": [254, 255], "dec": 0, "conf": "psa-re"},
+    {"k": "limiter", "id": "208", "bits": "5.3-5.2", "t": "enum", "enum": {"0": "Waiting", "1": "Resumed", "2": "Active", "3": "Off"}, "conf": "psa-re"},
+    {"k": "epb", "id": "3AD", "bits": "4.2-4.0", "t": "enum", "enum": {"0": "Released", "1": "Applied", "2": "Applying", "3": "Releasing", "4": "Dynamic", "5": "Max force"}, "conf": "confirmed"},
+    {"k": "odo", "id": "552", "bits": "5.7-7.0", "inv": 16777215, "dec": 0, "conf": "confirmed"},
+
+    {"k": "soh_cap", "id": "454", "bits": "3.3-4.5", "inv": 127, "dec": 0, "conf": "psa-re"},
+    {"k": "soh_res", "id": "454", "bits": "4.4-5.6", "inv": 127, "dec": 0, "conf": "psa-re"},
+    {"k": "relay", "id": "454", "bits": "1.7-2.6", "f": 200, "inv": 1023, "dec": 0, "conf": "psa-re"},
+    {"k": "dc_relay", "id": "454", "bits": "2.5-3.4", "f": 200, "inv": 1023, "dec": 0, "conf": "psa-re"},
+    {"k": "life_ah", "id": "454", "bits": "6.0-8.5", "f": 125, "inv": 4095, "dec": 0, "conf": "psa-re"},
+    {"k": "cell_max", "id": "5A3", "bits": "4.7-5.2", "f": 0.001, "inv": [0, 16383], "dec": 3, "conf": "psa-re"},
+    {"k": "cell_max_n", "id": "5A3", "bits": "3.7-3.0", "inv": 255, "dec": 0, "conf": "psa-re"},
+    {"k": "cell_min", "id": "5A3", "bits": "7.7-8.2", "f": 0.001, "inv": [0, 16383], "dec": 3, "conf": "psa-re"},
+    {"k": "cell_min_n", "id": "5A3", "bits": "6.7-6.0", "inv": 255, "dec": 0, "conf": "psa-re"},
+    {"k": "insulation", "id": "5A3", "bits": "1.7-2.0", "inv": 65535, "dec": 0, "conf": "psa-re"},
+    {"k": "t_avg", "id": "522", "bits": "5.7-5.0", "o": -40, "inv": [0, 255], "dec": 0, "conf": "psa-re"},
+    {"k": "t_min", "id": "583", "bits": "3.7-3.0", "o": -40, "inv": [0, 255], "dec": 0, "conf": "psa-re"},
+
+    {"k": "t_out", "id": "5B2", "bits": "3.7-3.0", "f": 0.5, "o": -40, "inv": 255, "dec": 1, "conf": "psa-re"},
+    {"k": "t_inv", "id": "5C1", "bits": "6.7-6.0", "o": -40, "inv": [0, 255], "dec": 0, "conf": "psa-re"},
+    {"k": "t_stator", "id": "5C1", "bits": "7.7-7.0", "o": -40, "inv": [0, 255], "dec": 0, "conf": "psa-re"},
+    {"k": "t_dcdc", "id": "522", "bits": "1.7-1.0", "o": -40, "inv": [0, 255], "dec": 0, "conf": "psa-re"},
+    {"k": "t_evap", "id": "3CE", "bits": "5.2-6.0", "f": 0.1, "o": -40, "inv": 2047, "dec": 1, "conf": "verified"},
+    {"k": "t_heater", "id": "3CE", "bits": "3.7-3.0", "f": 0.5, "o": -40, "inv": [0, 255], "dec": 1, "conf": "psa-re"},
+    {"k": "v12", "id": "50D", "bits": "6.7-6.0", "f": 0.05, "o": 7, "inv": 255, "dec": 2, "conf": "psa-re"},
+    {"k": "dcdc_set", "id": "468", "bits": "4.1-5.4", "f": 0.1, "o": 10.6, "inv": 63, "dec": 1, "conf": "psa-re"},
+    {"k": "doors", "id": "412", "bits": "7.7-7.3", "dec": 0, "conf": "confirmed"},
+    {"k": "locked", "id": "512", "bits": "2.4-2.3", "t": "enum", "enum": {"0": "Unlocked", "1": "Locked (1)", "2": "Locked"}, "conf": "confirmed"},
+    {"k": "belt_d", "id": "572", "bits": "1.7-1.6", "t": "enum", "enum": {"0": "?", "1": "Unbuckled", "2": "Buckled"}, "conf": "psa-re"},
+    {"k": "belt_p", "id": "572", "bits": "1.5-1.4", "t": "enum", "enum": {"0": "?", "1": "Unbuckled", "2": "Buckled"}, "conf": "psa-re"},
+    {"k": "drl", "id": "40E", "bits": "3.6", "t": "bool", "enum": {"0": "Off", "1": "On"}, "conf": "ours"},
+    {"k": "side", "id": "40E", "bits": "5.3", "t": "bool", "enum": {"0": "Off", "1": "On"}, "conf": "confirmed"},
+    {"k": "low_cmd", "id": "40E", "bits": "5.1", "t": "bool", "enum": {"0": "Off", "1": "On"}, "conf": "confirmed"},
+    {"k": "low_state", "id": "612", "bits": "2.1", "t": "bool", "enum": {"0": "Off", "1": "On"}, "conf": "confirmed"}
+  ],
+  "groups": [
+    {"k": "cells", "id": "334", "page": "1.7-1.3", "pages": 27, "fields": ["2.7-3.2", "3.1-5.4", "5.3-7.6", "7.5-8.0"], "f": 0.001, "inv": [0, 16383]},
+    {"k": "temps", "id": "3F4", "page": "1.7-1.5", "pages": 8, "fields": ["2.7-2.0", "3.7-3.0", "4.7-4.0", "5.7-5.0", "6.7-6.0", "7.7-7.0", "8.7-8.0"], "o": -40, "inv": [0, 255]}
+  ]
+}
+</script>
+
+<script>
+"use strict";
+
+// --- Signal decoding (same notation as tools/psare.py) ---
+
+const TABLE = JSON.parse(document.getElementById("signals").textContent);
+const STALE_MS = 3000;
+
+function bitPos(s) {
+  const [byte, bit] = s.split(".").map(Number);
+  return (byte - 1) * 8 + (7 - bit);
+}
+
+// [first bit, length] in transmission order.
+function bitRange(spec) {
+  if (!spec.includes("-")) return [bitPos(spec), 1];
+  const [a, b] = spec.split("-").map(bitPos);
+  return [a, b - a + 1];
+}
+
+function extract(data, pos, len) {
+  let v = 0;
+  for (let i = pos; i < pos + len; i++) v = v * 2 + ((data[i >> 3] >> (7 - (i & 7))) & 1);
+  return v;
+}
+
+function prepare(s) {
+  s.inv = s.inv == null ? [] : [].concat(s.inv);
+  s.f = s.f ?? 1;
+  s.o = s.o ?? 0;
+  s.idNum = parseInt(s.id, 16);
+}
+
+const SIG = {};
+for (const s of TABLE.signals) {
+  prepare(s);
+  [s.pos, s.len] = bitRange(s.bits);
+  SIG[s.k] = s;
+}
+const GROUP = {};
+for (const g of TABLE.groups) {
+  prepare(g);
+  g.ranges = g.fields.map(bitRange);
+  GROUP[g.k] = g;
+}
+
+function decodeRaw(s, v, len) {
+  if (s.inv.includes(v)) return null;
+  if (s.t === "s" && v >= 2 ** (len - 1)) v -= 2 ** len;
+  if (s.t === "enum" || s.t === "bool") return v;
+  return v * s.f + s.o;
+}
+
+// --- Frame table from the board ---
+
+const frames = new Map();  // id, or "id:page" for muxed IDs
+let devNow = 0;            // board time of the latest table, ms since boot
+let status = null;
+let dirty = true;
+let newKeys = false;
+
+const keyOf = (id, page) => page === 255 ? String(id) : id + ":" + page;
+
+function parseFrames(buf) {
+  const dv = new DataView(buf);
+  if (dv.byteLength < 8 || dv.getUint8(0) !== 0x46 || dv.getUint8(1) !== 1) return;
+  const n = dv.getUint16(2, true);
+  devNow = dv.getUint32(4, true);
+  for (let i = 0; i < n; i++) {
+    const o = 8 + i * 20;
+    const idField = dv.getUint16(o, true);
+    const id = idField & 0x7ff;
+    const page = dv.getUint8(o + 2);
+    const count = dv.getUint32(o + 4, true);
+    const last = dv.getUint32(o + 8, true);
+    const data = new Uint8Array(buf, o + 12, 8);
+    const k = keyOf(id, page);
+    let e = frames.get(k);
+    if (!e) {
+      e = { id, page, data: new Uint8Array(data), changed: new Float64Array(8), c0: count, t0: last, period: null };
+      frames.set(k, e);
+      newKeys = true;
+    } else {
+      for (let j = 0; j < 8; j++) {
+        if (data[j] !== e.data[j]) { e.changed[j] = devNow; e.data[j] = data[j]; }
+      }
+    }
+    // Period averaged over at least 2 s, so a 5 Hz table still gives the 10 ms frames' real rate.
+    if (last - e.t0 >= 2000 && count > e.c0) {
+      e.period = (last - e.t0) / (count - e.c0);
+      e.c0 = count;
+      e.t0 = last;
+    }
+    e.count = count;
+    e.last = last;
+    e.dlc = dv.getUint8(o + 3);
+    e.rtr = (idField & 0x8000) !== 0;
+  }
+  trackPower();
+}
+
+// { v, stale } for a signal key, or null when its frame never arrived.
+function value(k) {
+  const s = SIG[k];
+  const e = frames.get(String(s.idNum));
+  if (!e) return null;
+  return { v: decodeRaw(s, extract(e.data, s.pos, s.len), s.len), stale: devNow - e.last > STALE_MS };
+}
+
+function format(s, v) {
+  if (v == null) return "–";
+  if (s.enum) return s.enum[v] ?? String(v);
+  return v.toFixed(s.dec ?? 0);
+}
+
+// Values of a muxed group by index (page * fields + field); null where missing or invalid.
+function groupValues(g) {
+  const out = [];
+  let stale = false, missing = 0;
+  for (let p = 0; p < g.pages; p++) {
+    const e = frames.get(keyOf(g.idNum, p));
+    if (e && devNow - e.last > STALE_MS) stale = true;
+    for (const [pos, len] of g.ranges) {
+      const v = e ? decodeRaw(g, extract(e.data, pos, len), len) : null;
+      if (!e) missing++;
+      out.push(v);
+    }
+  }
+  return { values: out, stale, missing };
+}
+
+// --- Power estimate: the BMS's remaining Ah falls as energy leaves the pack ---
+
+const POWER_WINDOW_MS = 3000;
+const ahHistory = [];          // [board ms, Ah]
+const powerHistory = [];       // one value per second, last 60
+let powerSecond = -1;
+
+function trackPower() {
+  const e = frames.get(String(SIG.ah.idNum));
+  if (e && (ahHistory.length === 0 || ahHistory[ahHistory.length - 1][0] !== e.last)) {
+    const ah = decodeRaw(SIG.ah, extract(e.data, SIG.ah.pos, SIG.ah.len), SIG.ah.len);
+    if (ah == null) ahHistory.length = 0;
+    else ahHistory.push([e.last, ah]);
+    while (ahHistory.length && e.last - ahHistory[0][0] > 10000) ahHistory.shift();
+  }
+  const second = Math.floor(devNow / 1000);
+  if (second !== powerSecond) {
+    powerSecond = second;
+    powerHistory.push(powerKw());
+    if (powerHistory.length > 60) powerHistory.shift();
+  }
+}
+
+function powerKw() {
+  if (ahHistory.length < 2) return null;
+  const [t1, a1] = ahHistory[ahHistory.length - 1];
+  let i = ahHistory.length - 2;
+  while (i > 0 && t1 - ahHistory[i][0] < POWER_WINDOW_MS) i--;
+  const [t0, a0] = ahHistory[i];
+  const volts = value("hv_v");
+  if (t1 - t0 < 1500 || devNow - t1 > STALE_MS || !volts || volts.v == null) return null;
+  return -(a1 - a0) / ((t1 - t0) / 3.6e6) * volts.v / 1000;
+}
+
+// --- Rendering ---
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+let activeTab = "drive";
+
+function setText(el, text) {
+  if (el.textContent !== text) el.textContent = text;
+}
+
+function renderBindings(root) {
+  for (const el of $$("[data-k]", root)) {
+    const s = SIG[el.dataset.k];
+    const r = value(el.dataset.k);
+    setText(el, format(s, r && r.v));
+    el.classList.toggle("stale", !r || r.stale);
+  }
+}
+
+function setBar(id, fraction) {
+  $(id).style.width = (Math.max(0, Math.min(1, fraction || 0)) * 100).toFixed(1) + "%";
+}
+
+function renderDrive() {
+  const soc = value("soc");
+  setBar("#soc-bar", soc && soc.v / 100);
+  const accel = value("accel");
+  setBar("#accel-bar", accel && accel.v / 100);
+  const brake = value("brake");
+  setBar("#brake-bar", brake && brake.v / 60);
+
+  const p = powerKw();
+  setText($("#power"), p == null ? "–" : p.toFixed(1));
+  const peak = Math.max(10, ...powerHistory.map(v => Math.abs(v ?? 0)));
+  const offset = 60 - powerHistory.length;
+  const pts = powerHistory.map((v, i) => v == null ? null : `${i + offset},${(20 - v / peak * 19).toFixed(2)}`);
+  $("#power-spark polyline").setAttribute("points", pts.filter(Boolean).join(" "));
+}
+
+const cellRects = [];
+const tempCells = [];
+
+function buildBattery() {
+  const svg = $("#cells");
+  for (let i = 0; i < 108; i++) {
+    const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    r.setAttribute("x", i + 0.1);
+    r.setAttribute("width", 0.8);
+    r.setAttribute("y", 40);
+    r.setAttribute("height", 0);
+    svg.appendChild(r);
+    cellRects.push(r);
+  }
+  const grid = $("#temps");
+  for (let i = 0; i < 56; i++) {
+    const d = document.createElement("div");
+    grid.appendChild(d);
+    tempCells.push(d);
+  }
+}
+
+function renderBattery() {
+  const cells = groupValues(GROUP.cells);
+  const valid = cells.values.filter(v => v != null);
+  if (valid.length) {
+    const lo = Math.min(...valid), hi = Math.max(...valid);
+    // At least 20 mV of range, so a balanced pack doesn't look dramatic.
+    const span = Math.max(hi - lo, 0.02);
+    const base = lo - span * 0.25, top = hi + span * 0.1;
+    cells.values.forEach((v, i) => {
+      const h = v == null ? 0 : (v - base) / (top - base) * 40;
+      cellRects[i].setAttribute("y", (40 - h).toFixed(2));
+      cellRects[i].setAttribute("height", h.toFixed(2));
+      cellRects[i].setAttribute("class", v === lo ? "min" : v === hi ? "max" : "");
+    });
+    const avg = valid.reduce((a, b) => a + b, 0) / valid.length;
+    const iLo = cells.values.indexOf(lo) + 1, iHi = cells.values.indexOf(hi) + 1;
+    setText($("#cells-sum"), `min ${lo.toFixed(3)} V (#${iLo}) · max ${hi.toFixed(3)} V (#${iHi}) · ` +
+      `spread ${((hi - lo) * 1000).toFixed(0)} mV · avg ${avg.toFixed(3)} V` +
+      (cells.missing ? ` · ${cells.missing / 4} pages missing` : ""));
+  }
+  $("#cells").classList.toggle("stale", cells.stale || !valid.length);
+
+  const temps = groupValues(GROUP.temps);
+  const tv = temps.values.filter(v => v != null);
+  const tLo = Math.min(...tv), tHi = Math.max(...tv);
+  const tSpan = Math.max(tHi - tLo, 4);
+  temps.values.forEach((v, i) => {
+    setText(tempCells[i], v == null ? "–" : String(v));
+    // Blue (cold) to red (warm) across the pack's own range.
+    tempCells[i].style.background = v == null ? "" : `hsl(${(220 - (v - tLo) / tSpan * 220).toFixed(0)} 60% 40%)`;
+    tempCells[i].style.color = v == null ? "" : "#fff";
+  });
+  setText($("#temps-sum"), tv.length ? `spread ${tHi - tLo} °C over ${tv.length} probes` : "no data");
+  $("#temps").classList.toggle("stale", temps.stale || !tv.length);
+}
+
+const DOORS = { 1: "front left", 2: "front right", 4: "rear left", 8: "rear right", 16: "boot" };
+
+function renderCar() {
+  const doors = value("doors");
+  const bits = doors && doors.v != null ? doors.v : 0;
+  const open = [];
+  for (const [bit, name] of Object.entries(DOORS)) {
+    const isOpen = (bits & bit) !== 0;
+    $("#door-" + bit).classList.toggle("open", isOpen);
+    if (isOpen) open.push(name);
+  }
+  setText($("#doors-text"), !doors ? "–" : open.length ? "open: " + open.join(", ") : "all closed");
+  $("#doors").classList.toggle("stale", !doors || doors.stale);
+}
+
+const rawRows = new Map();
+const hex2 = v => v.toString(16).toUpperCase().padStart(2, "0");
+
+function rawRow(e) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = "<td></td><td></td><td class=num></td><td class=num></td><td class=bytes></td>";
+  tr.cells[0].textContent = e.id.toString(16).toUpperCase().padStart(3, "0");
+  tr.cells[1].textContent = e.page === 255 ? "" : e.page;
+  const spans = [];
+  for (let j = 0; j < 8; j++) spans.push(tr.cells[4].appendChild(document.createElement("span")));
+  return { tr, spans };
+}
+
+function renderRaw() {
+  if (newKeys) {
+    newKeys = false;
+    const body = $("#raw-body");
+    const sorted = [...frames.values()].sort((a, b) => a.id - b.id || a.page - b.page);
+    for (const e of sorted) {
+      const k = keyOf(e.id, e.page);
+      if (!rawRows.has(k)) rawRows.set(k, rawRow(e));
+      body.appendChild(rawRows.get(k).tr);
+    }
+  }
+  const filter = $("#raw-filter").value.trim().toUpperCase();
+  const changingOnly = $("#raw-changing").checked;
+  for (const [k, row] of rawRows) {
+    const e = frames.get(k);
+    const lastChange = Math.max(...e.changed);
+    const hidden = (filter && !row.tr.cells[0].textContent.startsWith(filter)) ||
+      (changingOnly && devNow - lastChange > 10000);
+    row.tr.hidden = hidden;
+    if (hidden) continue;
+    setText(row.tr.cells[2], e.period == null ? "" : e.period.toFixed(0));
+    setText(row.tr.cells[3], String(e.count));
+    row.tr.classList.toggle("stale", devNow - e.last > STALE_MS);
+    const len = e.rtr ? 0 : Math.min(e.dlc, 8);
+    for (let j = 0; j < 8; j++) {
+      setText(row.spans[j], j < len ? hex2(e.data[j]) : "");
+      row.spans[j].classList.toggle("chg", j < len && devNow - e.changed[j] < 300);
+    }
+  }
+}
+
+function fmtUptime(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60;
+  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s % 60).padStart(2, "0");
+}
+
+const REC_TEXT = { no_card: "No SD card", off: "Off", on: "Recording", failed: "Failed" };
+
+function renderLogger() {
+  if (!status) return;
+  setText($("#l-rec"), REC_TEXT[status.rec] || status.rec);
+  setText($("#l-session"), status.session ? `can-sniff/${status.session} · ${status.marks} marks` : "");
+  setText($("#l-uptime"), fmtUptime(status.uptime_ms));
+  setText($("#l-fps"), String(status.fps));
+  setText($("#l-frames"), status.frames.toLocaleString() + " since boot");
+  setText($("#l-dropped"), `${status.rx_dropped} / ${status.sd_dropped}`);
+  setText($("#l-buffers"), status.buffers ? `${status.buffers_free}/${status.buffers}` : "–");
+  setText($("#l-errors"), `${status.bus_errors}` + (status.bus_errors_per_s ? ` (+${status.bus_errors_per_s}/s)` : ""));
+  setText($("#l-heap"), `${(status.heap_free / 1024).toFixed(0)} / ${(status.heap_min / 1024).toFixed(0)} KB`);
+}
+
+let recPending = null;  // { want, until } while waiting for the board to confirm
+
+function renderHeader() {
+  const fresh = ws && ws.readyState === WebSocket.OPEN && Date.now() - lastMessage < 2000;
+  $("#conn").className = "dot " + (fresh ? "ok" : ws && ws.readyState === WebSocket.OPEN ? "wait" : "");
+
+  const rec = $("#rec"), markBtn = $("#mark-btn");
+  if (recPending && (Date.now() > recPending.until || (status && (status.rec === "on") === recPending.want))) {
+    recPending = null;
+  }
+  const state = status ? status.rec : null;
+  rec.disabled = !fresh || !status || state === "no_card";
+  rec.className = state === "on" ? "on" : state === "failed" ? "failed" : "";
+  setText(rec, recPending ? "…" : state === "on" ? "● REC" : state === "failed" ? "REC failed" :
+    state === "no_card" ? "No SD" : "REC");
+  markBtn.disabled = !fresh || state !== "on";
+  if (markBtn.disabled && !$("#mark-panel").hidden) toggleMarkPanel(false);
+
+  const info = !status ? (fresh ? "Waiting for status…" : "Connecting…") :
+    `${status.fps} fr/s · ${fmtUptime(status.uptime_ms)}` +
+    (state === "on" ? ` · ${status.session} · ${status.marks} marks` : "") +
+    (status.bus_errors_per_s ? ` · ${status.bus_errors_per_s} bus err/s` : "");
+  setText($("#info"), fresh ? info : "Disconnected – reconnecting…");
+}
+
+function render() {
+  renderHeader();
+  const section = $("#tab-" + activeTab);
+  renderBindings(section);
+  if (activeTab === "drive") renderDrive();
+  else if (activeTab === "battery") renderBattery();
+  else if (activeTab === "car") renderCar();
+  else if (activeTab === "raw") { renderLogger(); renderRaw(); }
+}
+
+function loop() {
+  if (dirty) {
+    dirty = false;
+    render();
+  }
+  requestAnimationFrame(loop);
+}
+
+// --- Connection and controls ---
+
+let ws = null;
+let lastMessage = 0;
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+  ws.onmessage = ev => {
+    lastMessage = Date.now();
+    if (typeof ev.data === "string") {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "status") status = msg;
+    } else {
+      parseFrames(ev.data);
+    }
+    dirty = true;
+  };
+  ws.onclose = () => {
+    ws = null;
+    dirty = true;
+    setTimeout(connect, 1000);
+  };
+  ws.onerror = () => ws && ws.close();
+}
+
+function send(text) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(text);
+}
+
+$("#rec").onclick = () => {
+  if (!status) return;
+  const want = !(status.rec === "on" || status.rec === "failed");
+  send(want ? "rec on" : "rec off");
+  recPending = { want, until: Date.now() + 3000 };
+  dirty = true;
+};
+
+function toggleMarkPanel(show) {
+  $("#mark-panel").hidden = !show;
+  $("#mark-btn").classList.toggle("open", show);
+}
+
+$("#mark-btn").onclick = () => toggleMarkPanel($("#mark-panel").hidden);
+
+function mark(label) {
+  label = label.trim().slice(0, 31);
+  if (!label) return;
+  send("mark " + label);
+  setText($("#mark-log"), `Marked “${label}” at ${(devNow / 1000).toFixed(1)} s`);
+}
+
+for (const b of $$("#mark-panel [data-label]")) b.onclick = () => mark(b.dataset.label);
+$("#mark-form").onsubmit = ev => {
+  ev.preventDefault();
+  mark($("#mark-text").value);
+  $("#mark-text").value = "";
+};
+
+function showTab(tab) {
+  activeTab = tab;
+  for (const b of $$("nav button")) b.classList.toggle("active", b.dataset.tab === tab);
+  for (const s of $$("main section")) s.hidden = s.id !== "tab-" + tab;
+  try { localStorage.setItem("tab", tab); } catch (e) { /* private mode */ }
+  history.replaceState(null, "", "#" + tab);
+  dirty = true;
+}
+
+for (const b of $$("nav button")) b.onclick = () => showTab(b.dataset.tab);
+window.onhashchange = () => {
+  const t = location.hash.slice(1);
+  if (/^\w+$/.test(t) && $("#tab-" + t) && t !== activeTab) showTab(t);
+};
+$("#raw-filter").oninput = $("#raw-changing").onchange = () => { dirty = true; };
+
+// Confidence dot in each tile's label, from the signal table (or data-conf for derived values).
+for (const tile of $$(".tile")) {
+  const el = tile.querySelector("[data-k]");
+  const conf = tile.dataset.conf || (el && SIG[el.dataset.k].conf);
+  if (!conf) continue;
+  const dot = document.createElement("i");
+  dot.className = "c " + conf;
+  dot.title = conf;
+  tile.querySelector(".lbl").prepend(dot);
+}
+
+buildBattery();
+{
+  // The address (#battery) wins over the last tab used, so a bookmark opens where it points.
+  let t = location.hash.slice(1);
+  try { t = t || localStorage.getItem("tab"); } catch (e) { /* private mode */ }
+  if (t && /^\w+$/.test(t) && $("#tab-" + t)) showTab(t);
+}
+setInterval(() => { dirty = true; }, 1000);
+connect();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
