@@ -41,7 +41,7 @@ with a 4-bit checksum + 4-bit process counter.
 | 563 | b4-b6[7:4] (20 bits) | BMS remaining capacity | ×0.001 Ah | PSA-RE | 68.2 → 58.5 Ah (~3.9 kWh at 400 V for 23 km) |
 | 543 | b0-b1 | BMS remaining energy | Wh | doubtful | 17.5 → 15.3 kWh; "total energy" 32.3 kWh doesn't fit a 50 kWh pack; frame is 4 bytes here, 6 in PSA-RE. Was our "second SoC" guess |
 | 334 | mux b0[7:3] | **All 108 cell voltages**, 4 per page | V | PSA-RE | 3.78 → 3.71 V, spread ~10-20 mV |
-| 5A3 | | Max / min cell voltage + cell number, insulation resistance | V, kΩ | PSA-RE | max 3.78 → 3.72, min 3.76 → 3.70 |
+| 5A3 | | Max / min cell voltage + cell number, insulation resistance | V, kΩ | PSA-RE | max 3.78 → 3.72, min 3.76 → 3.70. Voltages move in **20 mV steps** (every value in trip1/3 is a multiple of 20 mV), so `334` is the precise source. Cell numbers are **0-based** (verified: trip3 min cell = 0-based index from `334` in 100 % of samples); PSA-RE's ×11 factor on them is wrong |
 | 3F4 | mux b0[7:5] | **All 54 temperature probes**, 6-7 per page | raw − 40 °C | verified | 12-13 °C all trip |
 | 583 | b2 | Min battery temperature | raw − 40 °C | PSA-RE | 12 °C. b0/b1 = probe numbers of max/min |
 | 583 | b5, b6 | Probe counts: 54 temperature, 108 voltage | | verified | Not outside temperature, as I first guessed |

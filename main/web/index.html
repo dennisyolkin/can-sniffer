@@ -93,6 +93,7 @@
   #cells rect { fill: var(--accent); }
   #cells rect.min { fill: var(--bad); }
   #cells rect.max { fill: var(--good); }
+  #cells line { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; }
   #temps { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; margin-top: .4rem; }
   #temps div { text-align: center; font-size: .8rem; padding: .3rem 0; border-radius: 4px; background: var(--line); }
 
@@ -198,8 +199,9 @@
     <div class="tile"><div class="lbl">SoH resistance</div><div class="val"><span data-k="soh_res"></span><small>%</small></div></div>
     <div class="tile"><div class="lbl">HV voltage</div><div class="val"><span data-k="hv_v"></span><small>V</small></div></div>
     <div class="tile"><div class="lbl">Remaining</div><div class="val"><span data-k="ah"></span><small>Ah</small></div></div>
-    <div class="tile"><div class="lbl">Cell min</div><div class="val"><span data-k="cell_min"></span><small>V</small></div><div class="sub">cell <span data-k="cell_min_n"></span></div></div>
-    <div class="tile"><div class="lbl">Cell max</div><div class="val"><span data-k="cell_max"></span><small>V</small></div><div class="sub">cell <span data-k="cell_max_n"></span></div></div>
+    <!-- From the 108 cells in 334 (1 mV). 5A3's own min/max moves in 20 mV steps, so it's only the second line. -->
+    <div class="tile" data-conf="psa-re"><div class="lbl">Cell min</div><div class="val"><span id="cell-min">–</span><small>V</small></div><div class="sub">#<span id="cell-min-n">–</span> · BMS <span data-k="cell_min"></span> V #<span data-k="cell_min_n"></span></div></div>
+    <div class="tile" data-conf="psa-re"><div class="lbl">Cell max</div><div class="val"><span id="cell-max">–</span><small>V</small></div><div class="sub">#<span id="cell-max-n">–</span> · BMS <span data-k="cell_max"></span> V #<span data-k="cell_max_n"></span></div></div>
     <div class="tile"><div class="lbl">Insulation</div><div class="val"><span data-k="insulation"></span><small>kΩ</small></div></div>
     <div class="tile"><div class="lbl">Lifetime charge</div><div class="val"><span data-k="life_ah"></span><small>Ah</small></div></div>
     <div class="tile"><div class="lbl">Main relay cycles</div><div class="val"><span data-k="relay"></span></div></div>
@@ -208,11 +210,13 @@
       <div class="lbl">108 cell voltages (334)</div>
       <div class="sub" id="cells-sum">waiting for all pages…</div>
       <svg id="cells" viewBox="0 0 108 40" preserveAspectRatio="none"></svg>
+      <div class="sub" id="cells-scale"></div>
     </div>
     <div class="tile full" data-conf="verified">
       <div class="lbl">Temperature probes, °C (3F4)</div>
       <div class="sub">average <span data-k="t_avg"></span> °C · min <span data-k="t_min"></span> °C · <span id="temps-sum"></span></div>
       <div id="temps"></div>
+      <div class="sub">colour: 0 °C blue · 22 °C green · 45 °C red</div>
     </div>
   </div>
 </section>
@@ -316,10 +320,10 @@
     {"k": "relay", "id": "454", "bits": "1.7-2.6", "f": 200, "inv": 1023, "dec": 0, "conf": "psa-re"},
     {"k": "dc_relay", "id": "454", "bits": "2.5-3.4", "f": 200, "inv": 1023, "dec": 0, "conf": "psa-re"},
     {"k": "life_ah", "id": "454", "bits": "6.0-8.5", "f": 125, "inv": 4095, "dec": 0, "conf": "psa-re"},
-    {"k": "cell_max", "id": "5A3", "bits": "4.7-5.2", "f": 0.001, "inv": [0, 16383], "dec": 3, "conf": "psa-re"},
-    {"k": "cell_max_n", "id": "5A3", "bits": "3.7-3.0", "inv": 255, "dec": 0, "conf": "psa-re"},
-    {"k": "cell_min", "id": "5A3", "bits": "7.7-8.2", "f": 0.001, "inv": [0, 16383], "dec": 3, "conf": "psa-re"},
-    {"k": "cell_min_n", "id": "5A3", "bits": "6.7-6.0", "inv": 255, "dec": 0, "conf": "psa-re"},
+    {"k": "cell_max", "id": "5A3", "bits": "4.7-5.2", "f": 0.001, "inv": [0, 16383], "dec": 2, "conf": "psa-re"},
+    {"k": "cell_max_n", "id": "5A3", "bits": "3.7-3.0", "o": 1, "inv": 255, "dec": 0, "conf": "verified"},
+    {"k": "cell_min", "id": "5A3", "bits": "7.7-8.2", "f": 0.001, "inv": [0, 16383], "dec": 2, "conf": "psa-re"},
+    {"k": "cell_min_n", "id": "5A3", "bits": "6.7-6.0", "o": 1, "inv": 255, "dec": 0, "conf": "verified"},
     {"k": "insulation", "id": "5A3", "bits": "1.7-2.0", "inv": 65535, "dec": 0, "conf": "psa-re"},
     {"k": "t_avg", "id": "522", "bits": "5.7-5.0", "o": -40, "inv": [0, 255], "dec": 0, "conf": "psa-re"},
     {"k": "t_min", "id": "583", "bits": "3.7-3.0", "o": -40, "inv": [0, 255], "dec": 0, "conf": "psa-re"},
@@ -566,6 +570,12 @@ function buildBattery() {
     svg.appendChild(r);
     cellRects.push(r);
   }
+  const mid = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  mid.setAttribute("x1", 0);
+  mid.setAttribute("x2", 108);
+  mid.setAttribute("y1", 20);
+  mid.setAttribute("y2", 20);
+  svg.appendChild(mid);
   const grid = $("#temps");
   for (let i = 0; i < 56; i++) {
     const d = document.createElement("div");
@@ -574,36 +584,47 @@ function buildBattery() {
   }
 }
 
+const TEMP_RED_C = 45;
+
 function renderBattery() {
   const cells = groupValues(GROUP.cells);
   const valid = cells.values.filter(v => v != null);
   if (valid.length) {
     const lo = Math.min(...valid), hi = Math.max(...valid);
-    // At least 20 mV of range, so a balanced pack doesn't look dramatic.
-    const span = Math.max(hi - lo, 0.02);
-    const base = lo - span * 0.25, top = hi + span * 0.1;
+    const avg = valid.reduce((a, b) => a + b, 0) / valid.length;
+    // Bars show each cell's deviation from the average, up or down from the middle line. A fixed minimum
+    // scale keeps a few mV from looking dramatic: zooming to min..max made a 9 mV low cell look half empty.
+    const range = Math.max(0.025, Math.max(hi - avg, avg - lo) * 1.2);
     cells.values.forEach((v, i) => {
-      const h = v == null ? 0 : (v - base) / (top - base) * 40;
-      cellRects[i].setAttribute("y", (40 - h).toFixed(2));
+      // A sliver even at the average, so every cell stays visible.
+      const h = v == null ? 0 : Math.max(Math.abs(v - avg) / range * 20, 0.4);
+      cellRects[i].setAttribute("y", (v != null && v < avg ? 20 : 20 - h).toFixed(2));
       cellRects[i].setAttribute("height", h.toFixed(2));
       cellRects[i].setAttribute("class", v === lo ? "min" : v === hi ? "max" : "");
     });
-    const avg = valid.reduce((a, b) => a + b, 0) / valid.length;
+    setText($("#cells-scale"), `bars: deviation from the average, full height ±${(range * 1000).toFixed(0)} mV`);
     const iLo = cells.values.indexOf(lo) + 1, iHi = cells.values.indexOf(hi) + 1;
+    setText($("#cell-min"), lo.toFixed(3));
+    setText($("#cell-max"), hi.toFixed(3));
+    // Several cells often share the extreme at 1 mV resolution; the BMS (5A3) may name another one of them.
+    const ties = x => cells.values.filter(v => v === x).length - 1;
+    setText($("#cell-min-n"), iLo + (ties(lo) ? ` +${ties(lo)}` : ""));
+    setText($("#cell-max-n"), iHi + (ties(hi) ? ` +${ties(hi)}` : ""));
     setText($("#cells-sum"), `min ${lo.toFixed(3)} V (#${iLo}) · max ${hi.toFixed(3)} V (#${iHi}) · ` +
       `spread ${((hi - lo) * 1000).toFixed(0)} mV · avg ${avg.toFixed(3)} V` +
       (cells.missing ? ` · ${cells.missing / 4} pages missing` : ""));
   }
-  $("#cells").classList.toggle("stale", cells.stale || !valid.length);
+  for (const id of ["#cells", "#cell-min", "#cell-max"]) $(id).classList.toggle("stale", cells.stale || !valid.length);
 
   const temps = groupValues(GROUP.temps);
   const tv = temps.values.filter(v => v != null);
   const tLo = Math.min(...tv), tHi = Math.max(...tv);
-  const tSpan = Math.max(tHi - tLo, 4);
   temps.values.forEach((v, i) => {
     setText(tempCells[i], v == null ? "–" : String(v));
-    // Blue (cold) to red (warm) across the pack's own range.
-    tempCells[i].style.background = v == null ? "" : `hsl(${(220 - (v - tLo) / tSpan * 220).toFixed(0)} 60% 40%)`;
+    // Fixed scale, not the pack's own range: stretching a 1 °C spread over the whole palette made 13 and 14 °C
+    // look like opposites. 0 °C and below blue, ~22 °C green, 45 °C and above red.
+    const hue = 220 - Math.max(0, Math.min(1, v / TEMP_RED_C)) * 220;
+    tempCells[i].style.background = v == null ? "" : `hsl(${hue.toFixed(0)} 60% 40%)`;
     tempCells[i].style.color = v == null ? "" : "#fff";
   });
   setText($("#temps-sum"), tv.length ? `spread ${tHi - tLo} °C over ${tv.length} probes` : "no data");
