@@ -90,7 +90,8 @@ class Replay:
         return json.dumps({
             "type": "status", "uptime_ms": now_us // 1000, "fps": self.fps, "frames": self.frames_total,
             "rx_dropped": 0, "bus_errors": 0, "bus_errors_per_s": 0, "rec": self.rec, "session": self.session,
-            "sd_dropped": 0, "buffers_free": 7, "buffers": 8, "marks": self.marks, "clients": clients,
+            "sd_dropped": 0, "buffers_free": 7, "buffers": 8, "marks": self.marks,
+            "can_mode": "listen_only", "bus_state": "error_passive", "clients": clients,
             "heap_free": 120_000, "heap_min": 100_000,
         })
 

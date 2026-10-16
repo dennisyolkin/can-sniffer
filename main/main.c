@@ -26,6 +26,12 @@
 #define CAN_SE_GPIO GPIO_NUM_23
 #define CAN_BITRATE 500000
 
+#if CONFIG_CAN_ACK_FRAMES
+#define CAN_MODE_NAME "normal"
+#else
+#define CAN_MODE_NAME "listen_only"
+#endif
+
 // Only has to cover scheduling hiccups of the logger loop: SD writes happen in their own task.
 #define RX_QUEUE_SIZE 256
 #define RX_IDLE_SAMPLES 1000
@@ -49,15 +55,16 @@ static unsigned rx_write;
 static unsigned rx_read;
 
 static volatile uint32_t rx_dropped;
-// Logged for diagnostics only. In listen-only mode the ESP32 driver forces REC to 128 (errata
-// workaround against error frames), so the state is always error_passive and says nothing about
-// bus health. Use bus_errors for that.
+// In listen-only mode the ESP32 driver forces REC to 128 (errata workaround against error frames), so the state is
+// always error_passive and says nothing about bus health; use bus_errors for that. In normal mode (CAN_ACK_FRAMES)
+// it is meaningful: anything but error_active means this node has seen, and likely sent, error frames.
 static volatile twai_error_state_t bus_state = TWAI_ERROR_ACTIVE;
 
 static twai_node_handle_t can_node;
 
 // Bus error counts by type, as reported by on_error. A listen-only node never transmits,
 // so bit and ACK errors are not expected; form and stuff errors point at a corrupted signal.
+// In normal mode the node drives the ACK slot and error flags, so any error here may have reached the car's bus.
 typedef struct {
     uint32_t total;
     uint32_t form;
@@ -139,10 +146,23 @@ static void halt_with_error(const char *what, esp_err_t err) {
 }
 
 static esp_err_t transceiver_init(void) {
-    // TX is held recessive as a plain GPIO and not given to the TWAI controller at all,
-    // so the hardware cannot drive the bus whatever the driver does.
+#if CONFIG_CAN_ACK_FRAMES
+    // The TWAI driver takes TX over when the node is created. Until then the internal pull-up keeps it recessive
+    // (the transceiver's D input is high impedance). An output here would reserve the pin, and the driver would then
+    // warn "GPIO 27 is not usable".
+    gpio_config_t tx_config = {
+        .pin_bit_mask = 1ULL << CAN_TX_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+    };
+    uint64_t output_mask = 1ULL << CAN_SE_GPIO;
+#else
+    // TX is held recessive as a plain GPIO and never given to the TWAI controller, so the hardware cannot drive the
+    // bus whatever the driver does.
+    uint64_t output_mask = (1ULL << CAN_TX_GPIO) | (1ULL << CAN_SE_GPIO);
+#endif
     gpio_config_t config = {
-        .pin_bit_mask = (1ULL << CAN_TX_GPIO) | (1ULL << CAN_SE_GPIO),
+        .pin_bit_mask = output_mask,
         .mode = GPIO_MODE_OUTPUT,
     };
     esp_err_t err = gpio_config(&config);
@@ -150,7 +170,11 @@ static esp_err_t transceiver_init(void) {
         return err;
     }
 
+#if CONFIG_CAN_ACK_FRAMES
+    err = gpio_config(&tx_config);
+#else
     err = gpio_set_level(CAN_TX_GPIO, 1);
+#endif
     if (err != ESP_OK) {
         return err;
     }
@@ -192,7 +216,11 @@ static esp_err_t twai_start(void) {
 
     twai_onchip_node_config_t config = {
         .io_cfg = {
+#if CONFIG_CAN_ACK_FRAMES
+            .tx = CAN_TX_GPIO,
+#else
             .tx = -1,
+#endif
             .rx = CAN_RX_GPIO,
             .quanta_clk_out = -1,
             .bus_off_indicator = -1,
@@ -200,7 +228,13 @@ static esp_err_t twai_start(void) {
         .bit_timing.bitrate = CAN_BITRATE,
         // 1 MHz: frame timestamps are in microseconds since boot, same clock as esp_timer_get_time().
         .timestamp_resolution_hz = 1000000,
+#if CONFIG_CAN_ACK_FRAMES
+        // The driver requires a TX queue outside listen-only mode. Nothing is ever queued: this build only ACKs.
+        // Bus-off is not recovered from: it means this node kept disturbing the bus, so it stays off until reboot.
+        .tx_queue_depth = 1,
+#else
         .flags.enable_listen_only = true,
+#endif
     };
 
     esp_err_t err = twai_new_node_onchip(&config, &can_node);
@@ -331,6 +365,7 @@ static esp_err_t start_session(session_t *session, uint32_t rx_idle_low) {
     sd_logger_get_stats(&stats);
     uint64_t now = esp_timer_get_time();
     log_uint_event(now, "bitrate", CAN_BITRATE);
+    sd_logger_log_event(now, "can_mode", CAN_MODE_NAME);
     log_uint_event(now, "rx_idle_low_per_1000", rx_idle_low);
     sd_logger_log_event(now, "bus_state", bus_state_names[session->state_reported]);
     return ESP_OK;
@@ -492,6 +527,8 @@ void app_main(void) {
             .buffers_min_free = stats.buffers_min_free,
             .buffer_count = stats.buffer_count,
             .marks = session.marks,
+            .can_mode = CAN_MODE_NAME,
+            .bus_state = bus_state_names[bus_state],
         };
         if (sd_logger_recording()) {
             strlcpy(status.session, session.name, sizeof(status.session));

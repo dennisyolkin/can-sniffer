@@ -12,6 +12,11 @@ foreach(name sdkconfig.defaults sdkconfig.secrets)
         list(APPEND defaults_files "${name}")
     endif()
 endforeach()
+# Test build that ACKs frames on the car's bus (CONFIG_CAN_ACK_FRAMES), kept apart from the car image:
+#   idf.py -B build-ack -D SDKCONFIG=build-ack/sdkconfig -D CAN_ACK_BUILD=1 build
+if(CAN_ACK_BUILD)
+    list(APPEND defaults_files "sdkconfig.ack")
+endif()
 set(SDKCONFIG_DEFAULTS "${defaults_files}")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

@@ -44,6 +44,9 @@
   #rec.on { background: var(--bad); border-color: var(--bad); color: #fff; }
   #rec.failed { border-color: var(--bad); color: var(--bad); }
   #mark-btn.open { border-color: var(--accent); color: var(--accent); }
+  /* The board ACKs frames on the car's bus (CAN_ACK_FRAMES test build). */
+  #active-badge { flex: none; font-size: .75rem; font-weight: 700; color: #fff; background: var(--bad); border-radius: 6px; padding: .15rem .4rem; }
+  #active-badge[hidden] { display: none; }
 
   #mark-panel { max-width: 760px; margin: .5rem auto 0; }
   #mark-panel .presets { display: flex; flex-wrap: wrap; gap: .4rem; }
@@ -119,6 +122,7 @@
   <div class="bar">
     <span id="conn" class="dot" title="Connection"></span>
     <span class="info" id="info">Connecting…</span>
+    <span id="active-badge" title="Normal mode: the board ACKs frames on the car's bus" hidden>ACK</span>
     <button id="mark-btn" disabled>Mark</button>
     <button id="rec" disabled>REC</button>
   </div>
@@ -272,6 +276,7 @@
     <div class="tile"><div class="lbl">Dropped (RX / SD)</div><div class="val" id="l-dropped"></div></div>
     <div class="tile"><div class="lbl">SD buffers min free</div><div class="val" id="l-buffers"></div></div>
     <div class="tile"><div class="lbl">Bus errors</div><div class="val" id="l-errors"></div></div>
+    <div class="tile"><div class="lbl">CAN mode</div><div class="val" id="l-mode"></div><div class="sub" id="l-bus-state"></div></div>
     <div class="tile"><div class="lbl">Heap free / min</div><div class="val" id="l-heap"></div></div>
   </div>
   <h2>Frames</h2>
@@ -708,6 +713,9 @@ function renderLogger() {
   setText($("#l-dropped"), `${status.rx_dropped} / ${status.sd_dropped}`);
   setText($("#l-buffers"), status.buffers ? `${status.buffers_free}/${status.buffers}` : "–");
   setText($("#l-errors"), `${status.bus_errors}` + (status.bus_errors_per_s ? ` (+${status.bus_errors_per_s}/s)` : ""));
+  setText($("#l-mode"), status.can_mode === "normal" ? "Normal (ACK)" : "Listen-only");
+  // Listen-only pins the ESP32 at error_passive (driver errata workaround), so the state only means something here.
+  setText($("#l-bus-state"), status.can_mode === "normal" ? status.bus_state : "");
   setText($("#l-heap"), `${(status.heap_free / 1024).toFixed(0)} / ${(status.heap_min / 1024).toFixed(0)} KB`);
 }
 
@@ -721,6 +729,7 @@ function renderHeader() {
   if (recPending && (Date.now() > recPending.until || (status && (status.rec === "on") === recPending.want))) {
     recPending = null;
   }
+  $("#active-badge").hidden = !status || status.can_mode !== "normal";
   const state = status ? status.rec : null;
   rec.disabled = !fresh || !status || state === "no_card";
   rec.className = state === "on" ? "on" : state === "failed" ? "failed" : "";

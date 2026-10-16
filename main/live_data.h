@@ -45,6 +45,8 @@ typedef struct {
     uint32_t buffers_min_free;
     uint32_t buffer_count;
     uint32_t marks;  // Marks written in this session.
+    const char *can_mode;   // "listen_only" or "normal" (ACKs frames); static string.
+    const char *bus_state;  // TWAI error state name; static string.
 } live_status_t;
 
 typedef struct {

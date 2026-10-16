@@ -30,3 +30,17 @@ menu "Live view Wi-Fi"
             Clients on the AP can reach the board as <hostname>.local (also always at 192.168.4.1).
 
 endmenu
+
+menu "CAN bus"
+
+    config CAN_ACK_FRAMES
+        bool "Normal mode: ACK frames on the car's bus (test build only)"
+        default n
+        help
+            Leaves listen-only mode: TX is routed to the TWAI controller, so the node ACKs every frame it receives
+            and sends error frames when it sees a bus error. The firmware still never transmits a frame of its own.
+
+            This makes the board an active participant on the car's bus. Keep it off for the normal car image;
+            enable it only for a deliberate test (parked, ignition on), and stop if bus errors appear.
+
+endmenu

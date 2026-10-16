@@ -34,7 +34,9 @@ Standalone CAN bus logger built on a LilyGO T-CAN485 (ESP32) plugged into the ca
 
 - **Language and framework:** plain **C**, **ESP-IDF v6.1**. No Arduino, no C++.
 - **Never disable `enable_listen_only` and never call `twai_node_transmit`** unless the user
-  explicitly asks. This is a real car on the road.
+  explicitly asks. This is a real car on the road. The one exception, requested by the user, is the separate
+  `CONFIG_CAN_ACK_FRAMES` test build (normal mode: ACKs frames, still never transmits). It stays off by default
+  and must never become the default car image.
 - Don't add console output to the hot path (ISR, RX, SD writing). Logging during init or errors is
   acceptable during development. It must be removable via sdkconfig (log level), not by
   editing code.
@@ -50,7 +52,7 @@ SN65HVD231 (3.3 V).
 
 | Function        | GPIO | Notes |
 |-----------------|------|-------|
-| CAN TX          | 27   | Held HIGH (recessive) as a plain GPIO; **not** routed to TWAI (`io_cfg.tx = -1`). |
+| CAN TX          | 27   | Held HIGH (recessive) as a plain GPIO; **not** routed to TWAI (`io_cfg.tx = -1`). ACK test build: pulled up, then routed to TWAI. |
 | CAN RX          | 26   | |
 | CAN SE / Rs     | 23   | Transceiver slope control. Driven **LOW** for high-speed mode (as in LilyGO's examples). |
 | SD MISO         | 2    | Strapping pin. The SD card can interfere with flashing. |
@@ -181,6 +183,11 @@ idf.py -B build -p /dev/tty.usbserial-595D0130391 flash monitor   # Ctrl-] to ex
 idf.py -B build menuconfig
 ```
 
+- ACK test build (normal mode, see Hard rules), in its own directory so the car image's `sdkconfig` stays untouched:
+  `idf.py -B build-ack -D SDKCONFIG=build-ack/sdkconfig -D CAN_ACK_BUILD=1 build`, then flash with the same
+  `-B`/`-D` options. The page shows a red "ACK" badge, and `events.csv` logs `can_mode=normal`. In this mode
+  `bus_state` means something (it should stay `error_active`), and any bus error may have reached the car's bus.
+  Bus-off is not recovered from until reboot.
 - Pass `-B build`: `CMakePresets.json` (used by the VS Code extension) otherwise makes `idf.py` configure into a
   broken `${sourceDir}/build/default` directory.
 - `sdkconfig` is git-ignored. Any config that matters goes in **`sdkconfig.defaults`** (flash size and partition
