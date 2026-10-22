@@ -1,11 +1,18 @@
+set(srcs
+    "main.c"
+    "status_led.c"
+    "sd_logger.c"
+    "live_data.c"
+    "wifi_ap.c"
+    "web_server.c"
+)
+# Only the test build can transmit; the car image does not even contain the code.
+if(CONFIG_CAN_UDS_REQUESTS)
+    list(APPEND srcs "uds_client.c")
+endif()
+
 idf_component_register(
-    SRCS
-        "main.c"
-        "status_led.c"
-        "sd_logger.c"
-        "live_data.c"
-        "wifi_ap.c"
-        "web_server.c"
+    SRCS ${srcs}
     INCLUDE_DIRS "."
     REQUIRES
       esp_driver_twai

@@ -20,6 +20,7 @@
 **/build/
 build/
 build-ack/
+build-uds/
 *.o
 *.a
 *.out

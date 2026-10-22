@@ -43,4 +43,14 @@ menu "CAN bus"
             This makes the board an active participant on the car's bus. Keep it off for the normal car image;
             enable it only for a deliberate test (parked, ignition on), and stop if bus errors appear.
 
+    config CAN_UDS_REQUESTS
+        bool "Send read-only diagnostic requests from the page (test build only)"
+        depends on CAN_ACK_FRAMES
+        default n
+        help
+            Adds buttons to the page that send a fixed list of single-frame diagnostic requests (uds_client.c):
+            UDS TesterPresent (0x3E) and ReadDataByIdentifier (0x22), OBD-II mode 01. Nothing else can be sent.
+            Replies are shown on the page and logged to events.csv. The node receives its own requests back
+            (loopback), so they also appear in can.log.
+
 endmenu

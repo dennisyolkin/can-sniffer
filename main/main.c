@@ -17,6 +17,9 @@
 #include "live_data.h"
 #include "sd_logger.h"
 #include "status_led.h"
+#if CONFIG_CAN_UDS_REQUESTS
+#include "uds_client.h"
+#endif
 #include "web_server.h"
 #include "wifi_ap.h"
 
@@ -107,6 +110,16 @@ static bool IRAM_ATTR on_rx_done(
     return higher_priority_task_woken == pdTRUE;
 }
 
+#if CONFIG_CAN_UDS_REQUESTS
+static bool IRAM_ATTR on_tx_done(
+    twai_node_handle_t node,
+    const twai_tx_done_event_data_t *edata,
+    void *user_ctx) {
+    uds_client_on_tx_done_from_isr(edata->is_tx_success);
+    return false;
+}
+#endif
+
 static bool IRAM_ATTR on_state_change(
     twai_node_handle_t node,
     const twai_state_change_event_data_t *edata,
@@ -119,6 +132,12 @@ static bool IRAM_ATTR on_error(
     twai_node_handle_t node,
     const twai_error_event_data_t *edata,
     void *user_ctx) {
+    // The driver reports a lost arbitration through on_error too. That is normal CAN behaviour when this node
+    // transmits (a car frame with a lower ID won), not a bus error, and the request is retried by uds_client.
+    twai_error_flags_t flags = edata->err_flags;
+    if (flags.arb_lost && !(flags.bit_err || flags.form_err || flags.stuff_err || flags.ack_err)) {
+        return false;
+    }
     bus_errors.total++;
     if (edata->err_flags.form_err) {
         bus_errors.form++;
@@ -232,6 +251,10 @@ static esp_err_t twai_start(void) {
         // The driver requires a TX queue outside listen-only mode. Nothing is ever queued: this build only ACKs.
         // Bus-off is not recovered from: it means this node kept disturbing the bus, so it stays off until reboot.
         .tx_queue_depth = 1,
+#if CONFIG_CAN_UDS_REQUESTS
+        // Our own requests come back through RX, so can.log and the live table show them in their place on the bus.
+        .flags.enable_loopback = true,
+#endif
 #else
         .flags.enable_listen_only = true,
 #endif
@@ -246,6 +269,9 @@ static esp_err_t twai_start(void) {
         .on_rx_done = on_rx_done,
         .on_state_change = on_state_change,
         .on_error = on_error,
+#if CONFIG_CAN_UDS_REQUESTS
+        .on_tx_done = on_tx_done,
+#endif
     };
 
     err = twai_node_register_event_callbacks(can_node, &callbacks, NULL);
@@ -449,7 +475,12 @@ void app_main(void) {
         halt_with_error("TWAI start", err);
     }
 
-    ESP_LOGI(TAG, "Listening passively at %d bit/s", CAN_BITRATE);
+    ESP_LOGI(TAG, "TWAI running at %d bit/s, mode %s", CAN_BITRATE, CAN_MODE_NAME);
+
+#if CONFIG_CAN_UDS_REQUESTS
+    // Without it the page simply gets no request buttons; receiving goes on.
+    bool uds_ready = uds_client_init(can_node) == ESP_OK;
+#endif
 
     session_t session = {0};
     if (auto_record && sd_present) {
@@ -481,9 +512,19 @@ void app_main(void) {
             live_data_update(&entry);
             // Returns at once when not recording or after a write failure; the LED and the page report that.
             sd_logger_log_can(&entry);
+#if CONFIG_CAN_UDS_REQUESTS
+            if (uds_ready) {
+                uds_client_on_frame(&entry);
+            }
+#endif
         }
 
         int64_t now = esp_timer_get_time();
+#if CONFIG_CAN_UDS_REQUESTS
+        if (uds_ready) {
+            uds_client_poll(now, bus_state == TWAI_ERROR_ACTIVE);
+        }
+#endif
         if (now < next_heartbeat) {
             continue;
         }

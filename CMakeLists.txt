@@ -17,6 +17,11 @@ endforeach()
 if(CAN_ACK_BUILD)
     list(APPEND defaults_files "sdkconfig.ack")
 endif()
+# Diagnostic request test build (CONFIG_CAN_UDS_REQUESTS, implies the ACK build):
+#   idf.py -B build-uds -D SDKCONFIG=build-uds/sdkconfig -D CAN_UDS_BUILD=1 build
+if(CAN_UDS_BUILD)
+    list(APPEND defaults_files "sdkconfig.uds")
+endif()
 set(SDKCONFIG_DEFAULTS "${defaults_files}")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

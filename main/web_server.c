@@ -13,6 +13,9 @@
 #include "esp_timer.h"
 
 #include "live_data.h"
+#if CONFIG_CAN_UDS_REQUESTS
+#include "uds_client.h"
+#endif
 
 #if !CONFIG_HTTPD_WS_SUPPORT
 #error "Enable CONFIG_HTTPD_WS_SUPPORT (sdkconfig.defaults; an existing sdkconfig overrides it)"
@@ -26,6 +29,8 @@
 #define FRAMES_MAGIC 'F'
 #define FRAMES_VERSION 1
 #define STATUS_JSON_MAX 512
+// Request list (about 60 characters per request) plus UDS_CLIENT_LOG_LEN entries of about 110 characters each.
+#define UDS_JSON_MAX 3072
 // Commands from the page are short ("rec on", "mark <label>"); anything longer closes the connection.
 #define MAX_INCOMING_LEN 64
 #define MAX_CLIENTS CONFIG_LWIP_MAX_SOCKETS
@@ -52,9 +57,16 @@ static char etag[ETAG_HASH_LEN + 3];
 
 // Only touched in the server's own task (handlers and queued work), so no locking.
 static unsigned push_count;
-static bool client_joined;
+// WebSocket sockets seen by the previous push. esp_http_server does not call the URI handler for the handshake
+// (httpd_uri.c), so a new page is noticed here, by a socket that was not in the list before.
+static int known_fds[MAX_CLIENTS];
+static size_t known_count;
 static uint8_t frames_buf[FRAMES_HEADER_LEN + MAX_FRAMES * sizeof(live_frame_t)];
 static char status_buf[STATUS_JSON_MAX];
+#if CONFIG_CAN_UDS_REQUESTS
+static char uds_buf[UDS_JSON_MAX];
+static uint32_t uds_seq_sent = UINT32_MAX;
+#endif
 
 // Set by the timer, cleared by the work item: skips a tick instead of queueing work behind a slow send.
 static atomic_bool push_pending;
@@ -131,6 +143,50 @@ static size_t build_status(size_t clients) {
     return len > 0 && len < (int) sizeof(status_buf) ? (size_t) len : 0;
 }
 
+#if CONFIG_CAN_UDS_REQUESTS
+static const char *const uds_kind_names[] = {
+    [UDS_LOG_TX] = "tx",
+    [UDS_LOG_RX] = "rx",
+    [UDS_LOG_TX_FAILED] = "tx_failed",
+    [UDS_LOG_DONE] = "done",
+    [UDS_LOG_REFUSED] = "refused",
+};
+
+// {"type":"uds","requests":[{"name":..,"label":..}],"log":[{"t":ms,"kind":..,"req":..,"id":..,"len":n,"data":"hex"}]}
+static size_t build_uds(uint32_t *seq) {
+    uds_log_entry_t entries[UDS_CLIENT_LOG_LEN];
+    size_t count = uds_client_get_log(entries, UDS_CLIENT_LOG_LEN, seq);
+
+    size_t pos = 0;
+    int n = snprintf(uds_buf, sizeof(uds_buf), "{\"type\":\"uds\",\"requests\":[");
+    for (size_t i = 0; i < uds_client_request_count() && n > 0 && pos + n < sizeof(uds_buf); i++) {
+        pos += n;
+        const uds_request_t *r = uds_client_get_request(i);
+        n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos, "%s{\"name\":\"%s\",\"label\":\"%s\"}",
+            i > 0 ? "," : "", r->name, r->label);
+    }
+    if (n > 0 && pos + n < sizeof(uds_buf)) {
+        pos += n;
+        n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos, "],\"log\":[");
+    }
+    for (size_t i = 0; i < count && n > 0 && pos + n < sizeof(uds_buf); i++) {
+        pos += n;
+        const uds_log_entry_t *e = &entries[i];
+        const uint8_t *d = e->data;
+        n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos,
+            "%s{\"t\":%" PRIu32 ",\"kind\":\"%s\",\"req\":\"%s\",\"id\":%u,\"len\":%u,"
+            "\"data\":\"%02X%02X%02X%02X%02X%02X%02X%02X\"}",
+            i > 0 ? "," : "", e->t_ms, uds_kind_names[e->kind], uds_client_get_request(e->request)->name,
+            (unsigned) e->id, (unsigned) e->len, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+    }
+    if (n > 0 && pos + n < sizeof(uds_buf)) {
+        pos += n;
+        n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos, "]}");
+    }
+    return n > 0 && pos + n < sizeof(uds_buf) ? pos + n : 0;
+}
+#endif
+
 static void send_all(const int *fds, size_t count, httpd_ws_type_t type, const void *payload, size_t len) {
     httpd_ws_frame_t frame = {
         .final = true,
@@ -161,6 +217,20 @@ static void push(void *arg) {
             fds[ws_count++] = fds[i];
         }
     }
+    // A socket number reused within one push period (200 ms) would be missed; the status follows within a second
+    // anyway.
+    bool joined = false;
+    for (size_t i = 0; i < ws_count && !joined; i++) {
+        joined = true;
+        for (size_t j = 0; j < known_count; j++) {
+            if (known_fds[j] == fds[i]) {
+                joined = false;
+                break;
+            }
+        }
+    }
+    memcpy(known_fds, fds, ws_count * sizeof(fds[0]));
+    known_count = ws_count;
     if (ws_count == 0) {
         return;
     }
@@ -169,13 +239,24 @@ static void push(void *arg) {
 
     // A new page gets the status (recording switch state) right away instead of within a second.
     push_count++;
-    if (push_count % STATUS_EVERY_N_PUSHES == 0 || client_joined) {
-        client_joined = false;
+    if (push_count % STATUS_EVERY_N_PUSHES == 0 || joined) {
         size_t len = build_status(ws_count);
         if (len > 0) {
             send_all(fds, ws_count, HTTPD_WS_TYPE_TEXT, status_buf, len);
         }
     }
+#if CONFIG_CAN_UDS_REQUESTS
+    // Sent to everybody when a new page joins: simpler than tracking which sockets have it.
+    uint32_t seq;
+    uds_client_get_log(NULL, 0, &seq);
+    if (seq != uds_seq_sent || joined) {
+        size_t uds_len = build_uds(&seq);
+        if (uds_len > 0) {
+            uds_seq_sent = seq;
+            send_all(fds, ws_count, HTTPD_WS_TYPE_TEXT, uds_buf, uds_len);
+        }
+    }
+#endif
 }
 
 // esp_timer task: hand the work to the server's task rather than touching sockets from here.
@@ -192,6 +273,13 @@ static void handle_command(const char *text) {
         live_data_request_recording(true);
     } else if (strcmp(text, "rec off") == 0) {
         live_data_request_recording(false);
+#if CONFIG_CAN_UDS_REQUESTS
+    } else if (strncmp(text, "uds ", 4) == 0) {
+        esp_err_t err = uds_client_request(text + 4);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "uds request \"%s\" not queued: %s", text + 4, esp_err_to_name(err));
+        }
+#endif
     } else if (strncmp(text, "mark ", 5) == 0) {
         if (live_data_add_mark(text + 5) != ESP_OK) {
             ESP_LOGW(TAG, "mark dropped: queue full");
@@ -202,9 +290,8 @@ static void handle_command(const char *text) {
 }
 
 static esp_err_t ws_handler(httpd_req_t *req) {
+    // Not called for the handshake itself in this IDF version, but harmless if a later one does.
     if (req->method == HTTP_GET) {
-        // Handshake done; from now on push() finds this socket in the client list.
-        client_joined = true;
         return ESP_OK;
     }
 

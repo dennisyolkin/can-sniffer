@@ -48,6 +48,14 @@
   #active-badge { flex: none; font-size: .75rem; font-weight: 700; color: #fff; background: var(--bad); border-radius: 6px; padding: .15rem .4rem; }
   #active-badge[hidden] { display: none; }
 
+  #uds[hidden] { display: none; }
+  #uds-buttons { display: flex; flex-wrap: wrap; gap: .4rem; }
+  #uds-log { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; margin-top: .5rem; }
+  #uds-log div { padding: .1rem 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #uds-log .pos { color: var(--good); }
+  #uds-log .neg, #uds-log .bad { color: var(--bad); }
+  #uds-log .meta { color: var(--muted); }
+
   #mark-panel { max-width: 760px; margin: .5rem auto 0; }
   #mark-panel .presets { display: flex; flex-wrap: wrap; gap: .4rem; }
   #mark-panel form { display: flex; gap: .4rem; margin-top: .4rem; }
@@ -122,7 +130,7 @@
   <div class="bar">
     <span id="conn" class="dot" title="Connection"></span>
     <span class="info" id="info">Connecting…</span>
-    <span id="active-badge" title="Normal mode: the board ACKs frames on the car's bus" hidden>ACK</span>
+    <span id="active-badge" title="Normal mode: the board ACKs frames on the car's bus (TX: and sends diagnostic requests)" hidden>ACK</span>
     <button id="mark-btn" disabled>Mark</button>
     <button id="rec" disabled>REC</button>
   </div>
@@ -278,6 +286,11 @@
     <div class="tile"><div class="lbl">Bus errors</div><div class="val" id="l-errors"></div></div>
     <div class="tile"><div class="lbl">CAN mode</div><div class="val" id="l-mode"></div><div class="sub" id="l-bus-state"></div></div>
     <div class="tile"><div class="lbl">Heap free / min</div><div class="val" id="l-heap"></div></div>
+  </div>
+  <div id="uds" hidden>
+    <h2>Diagnostics</h2>
+    <div id="uds-buttons"></div>
+    <div id="uds-log"></div>
   </div>
   <h2>Frames</h2>
   <div class="filters">
@@ -719,6 +732,67 @@ function renderLogger() {
   setText($("#l-heap"), `${(status.heap_free / 1024).toFixed(0)} / ${(status.heap_min / 1024).toFixed(0)} KB`);
 }
 
+// --- Diagnostic requests (CONFIG_CAN_UDS_REQUESTS build only) ---
+
+let uds = null;  // Last "uds" message: { requests, log }
+
+const NRC = {
+  0x10: "general reject", 0x11: "service not supported", 0x12: "sub-function not supported",
+  0x13: "wrong length", 0x22: "conditions not correct", 0x31: "request out of range",
+  0x33: "security access denied", 0x78: "response pending", 0x7E: "sub-function not supported in session",
+  0x7F: "service not supported in session",
+};
+
+const hex = (n, w = 2) => n.toString(16).toUpperCase().padStart(w, "0");
+
+// One line per log entry; replies are explained as ISO-TP single frame + UDS/OBD response.
+function udsLine(e) {
+  const b = [];
+  for (let i = 0; i < 16; i += 2) b.push(parseInt(e.data.slice(i, i + 2), 16));
+  const frame = hex(e.id, 3) + " " + b.slice(0, e.len).map(x => hex(x)).join(" ");
+  const t = (e.t / 1000).toFixed(2) + " s ";
+  if (e.kind === "tx") return [t + "→ " + frame, ""];
+  if (e.kind === "done") return [t + `done: ${e.len} repl${e.len === 1 ? "y" : "ies"}`, "meta"];
+  if (e.kind === "tx_failed") return [t + `not sent after ${e.len} attempts`, "bad"];
+  if (e.kind === "refused") return [t + "refused: bus not error_active", "bad"];
+  let what = "", cls = "";
+  if (b[0] >> 4 === 1) {
+    what = `multi-frame reply, ${((b[0] & 15) << 8) | b[1]} bytes (not followed)`;
+  } else if (b[1] === 0x7F) {
+    what = `negative: ${NRC[b[3]] || "NRC " + hex(b[3])}`;
+    cls = b[3] === 0x78 ? "meta" : "neg";
+  } else {
+    what = "positive";
+    cls = "pos";
+  }
+  return [t + "← " + frame + " · " + what, cls];
+}
+
+function renderUds() {
+  $("#uds").hidden = !uds;
+  if (!uds) return;
+  const last = uds.log[uds.log.length - 1];
+  const busy = last && (last.kind === "tx" || last.kind === "rx");
+  const box = $("#uds-buttons");
+  if (box.childElementCount !== uds.requests.length) {
+    box.replaceChildren(...uds.requests.map(r => {
+      const b = document.createElement("button");
+      b.textContent = r.label;
+      b.onclick = () => send("uds " + r.name);
+      return b;
+    }));
+  }
+  for (const b of box.children) b.disabled = busy || !(ws && ws.readyState === WebSocket.OPEN);
+  const log = $("#uds-log");
+  log.replaceChildren(...uds.log.slice().reverse().map(e => {
+    const [text, cls] = udsLine(e);
+    const d = document.createElement("div");
+    d.textContent = text;
+    d.className = cls;
+    return d;
+  }));
+}
+
 let recPending = null;  // { want, until } while waiting for the board to confirm
 
 function renderHeader() {
@@ -730,6 +804,7 @@ function renderHeader() {
     recPending = null;
   }
   $("#active-badge").hidden = !status || status.can_mode !== "normal";
+  setText($("#active-badge"), uds ? "TX" : "ACK");
   const state = status ? status.rec : null;
   rec.disabled = !fresh || !status || state === "no_card";
   rec.className = state === "on" ? "on" : state === "failed" ? "failed" : "";
@@ -752,7 +827,7 @@ function render() {
   if (activeTab === "drive") renderDrive();
   else if (activeTab === "battery") renderBattery();
   else if (activeTab === "car") renderCar();
-  else if (activeTab === "raw") { renderLogger(); renderRaw(); }
+  else if (activeTab === "raw") { renderLogger(); renderUds(); renderRaw(); }
 }
 
 function loop() {
@@ -776,6 +851,7 @@ function connect() {
     if (typeof ev.data === "string") {
       const msg = JSON.parse(ev.data);
       if (msg.type === "status") status = msg;
+      else if (msg.type === "uds") uds = msg;
     } else {
       parseFrames(ev.data);
     }
@@ -783,6 +859,7 @@ function connect() {
   };
   ws.onclose = () => {
     ws = null;
+    uds = null;  // The board may come back with another build; it resends the list when the page reconnects.
     dirty = true;
     setTimeout(connect, 1000);
   };
