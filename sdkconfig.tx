@@ -1,0 +1,3 @@
+# Extra defaults for the TX mode test build (see CMakeLists.txt): the node takes part in the car's bus (ACKs) and
+# sends the page's diagnostic requests.
+CONFIG_CAN_TX_MODE=y

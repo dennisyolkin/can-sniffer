@@ -44,7 +44,7 @@
   #rec.on { background: var(--bad); border-color: var(--bad); color: #fff; }
   #rec.failed { border-color: var(--bad); color: var(--bad); }
   #mark-btn.open { border-color: var(--accent); color: var(--accent); }
-  /* The board ACKs frames on the car's bus (CAN_ACK_FRAMES test build). */
+  /* TX mode build: the board takes part in the car's bus. */
   #active-badge { flex: none; font-size: .75rem; font-weight: 700; color: #fff; background: var(--bad); border-radius: 6px; padding: .15rem .4rem; }
   #active-badge[hidden] { display: none; }
 
@@ -130,7 +130,7 @@
   <div class="bar">
     <span id="conn" class="dot" title="Connection"></span>
     <span class="info" id="info">Connecting…</span>
-    <span id="active-badge" title="Normal mode: the board ACKs frames on the car's bus (TX: and sends diagnostic requests)" hidden>ACK</span>
+    <span id="active-badge" title="TX mode: the board ACKs frames on the car's bus and can send diagnostic requests" hidden>TX</span>
     <button id="mark-btn" disabled>Mark</button>
     <button id="rec" disabled>REC</button>
   </div>
@@ -726,13 +726,13 @@ function renderLogger() {
   setText($("#l-dropped"), `${status.rx_dropped} / ${status.sd_dropped}`);
   setText($("#l-buffers"), status.buffers ? `${status.buffers_free}/${status.buffers}` : "–");
   setText($("#l-errors"), `${status.bus_errors}` + (status.bus_errors_per_s ? ` (+${status.bus_errors_per_s}/s)` : ""));
-  setText($("#l-mode"), status.can_mode === "normal" ? "Normal (ACK)" : "Listen-only");
+  setText($("#l-mode"), status.can_mode === "tx" ? "TX" : "Listen-only");
   // Listen-only pins the ESP32 at error_passive (driver errata workaround), so the state only means something here.
-  setText($("#l-bus-state"), status.can_mode === "normal" ? status.bus_state : "");
+  setText($("#l-bus-state"), status.can_mode === "tx" ? status.bus_state : "");
   setText($("#l-heap"), `${(status.heap_free / 1024).toFixed(0)} / ${(status.heap_min / 1024).toFixed(0)} KB`);
 }
 
-// --- Diagnostic requests (CONFIG_CAN_UDS_REQUESTS build only) ---
+// --- Diagnostic requests (CONFIG_CAN_TX_MODE build only) ---
 
 let uds = null;  // Last "uds" message: { requests, log }
 
@@ -803,8 +803,7 @@ function renderHeader() {
   if (recPending && (Date.now() > recPending.until || (status && (status.rec === "on") === recPending.want))) {
     recPending = null;
   }
-  $("#active-badge").hidden = !status || status.can_mode !== "normal";
-  setText($("#active-badge"), uds ? "TX" : "ACK");
+  $("#active-badge").hidden = !status || status.can_mode !== "tx";
   const state = status ? status.rec : null;
   rec.disabled = !fresh || !status || state === "no_card";
   rec.className = state === "on" ? "on" : state === "failed" ? "failed" : "";

@@ -7,7 +7,7 @@ set(srcs
     "web_server.c"
 )
 # Only the test build can transmit; the car image does not even contain the code.
-if(CONFIG_CAN_UDS_REQUESTS)
+if(CONFIG_CAN_TX_MODE)
     list(APPEND srcs "uds_client.c")
 endif()
 

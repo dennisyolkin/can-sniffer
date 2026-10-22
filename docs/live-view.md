@@ -43,14 +43,14 @@ Server → page:
   `u8 data[8]`.
 - **Text, every second** (and at once when a page connects): JSON status, `{"type":"status", …}` with `uptime_ms`,
   `fps`, `frames`, `rx_dropped`, `bus_errors`, `bus_errors_per_s`, `rec` (`no_card`/`off`/`on`/`failed`),
-  `session`, `sd_dropped`, `buffers_free`, `buffers`, `marks`, `can_mode` (`listen_only`/`normal`; drives the
-  ACK/TX badge), `bus_state` (TWAI error state, only meaningful in `normal` mode), `clients`, `heap_free`,
+  `session`, `sd_dropped`, `buffers_free`, `buffers`, `marks`, `can_mode` (`listen_only`/`tx`; drives the
+  TX badge), `bus_state` (TWAI error state, only meaningful in `tx` mode), `clients`, `heap_free`,
   `heap_min`.
-- **Text, UDS build only:** `{"type":"uds","requests":[…],"log":[…]}` when the request log changes and when a page
+- **Text, TX mode only:** `{"type":"uds","requests":[…],"log":[…]}` when the request log changes and when a page
   connects (see "Transmitting" below).
 
 Page → server (text): `rec on`, `rec off`, `mark <label>` (label up to 31 chars; commas, quotes and control
-characters are replaced), and in the UDS build `uds <name>` (ignored while a request is in flight). Longer than 64
+characters are replaced), and in TX mode `uds <name>` (ignored while a request is in flight). Longer than 64
 bytes closes the connection.
 
 Muxed IDs (keyed by page so all pages are kept): `334` (cell voltages, page = b0 >> 3) and `3F4` (temperatures,
@@ -94,10 +94,13 @@ To check on the car:
 Leaving listen-only makes the node ACK every frame, so it is a bus participant even when it sends nothing. That is
 a build option, not a runtime switch:
 
-- `CONFIG_CAN_ACK_FRAMES` (build `build-ack`): normal mode, ACKs only. Header badge "ACK". Tested in the car on
-  2026-10-20: no warnings, no bus errors, ~1.5k frames/s as usual.
-- `CONFIG_CAN_UDS_REQUESTS` (build `build-uds`, implies ACK): `uds_client` adds a "Diagnostics" block to the Raw tab
-  with one button per predefined request; there is no free-form send box. Header badge "TX".
+- Listen-only (default, the car image): the node sends nothing, not even ACKs.
+- `CONFIG_CAN_TX_MODE` (build `build-tx`): normal TWAI mode, the node ACKs every frame, and `uds_client` adds a
+  "Diagnostics" block to the Raw tab with one button per predefined request; there is no free-form send box.
+  Header badge "TX".
+
+History: an ACK-only build (normal mode, nothing sent) was tested in the car on 2026-10-20: no warnings, no bus
+errors, ~1.5k frames/s as usual. It was later merged into TX mode.
 
 Requests (`uds_client.c`, allowlisted in C to UDS `0x3E`, `0x22` and OBD-II mode `01`, single frames only):
 

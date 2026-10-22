@@ -13,7 +13,7 @@
 #include "esp_timer.h"
 
 #include "live_data.h"
-#if CONFIG_CAN_UDS_REQUESTS
+#if CONFIG_CAN_TX_MODE
 #include "uds_client.h"
 #endif
 
@@ -63,7 +63,7 @@ static int known_fds[MAX_CLIENTS];
 static size_t known_count;
 static uint8_t frames_buf[FRAMES_HEADER_LEN + MAX_FRAMES * sizeof(live_frame_t)];
 static char status_buf[STATUS_JSON_MAX];
-#if CONFIG_CAN_UDS_REQUESTS
+#if CONFIG_CAN_TX_MODE
 static char uds_buf[UDS_JSON_MAX];
 static uint32_t uds_seq_sent = UINT32_MAX;
 #endif
@@ -143,7 +143,7 @@ static size_t build_status(size_t clients) {
     return len > 0 && len < (int) sizeof(status_buf) ? (size_t) len : 0;
 }
 
-#if CONFIG_CAN_UDS_REQUESTS
+#if CONFIG_CAN_TX_MODE
 static const char *const uds_kind_names[] = {
     [UDS_LOG_TX] = "tx",
     [UDS_LOG_RX] = "rx",
@@ -245,7 +245,7 @@ static void push(void *arg) {
             send_all(fds, ws_count, HTTPD_WS_TYPE_TEXT, status_buf, len);
         }
     }
-#if CONFIG_CAN_UDS_REQUESTS
+#if CONFIG_CAN_TX_MODE
     // Sent to everybody when a new page joins: simpler than tracking which sockets have it.
     uint32_t seq;
     uds_client_get_log(NULL, 0, &seq);
@@ -273,7 +273,7 @@ static void handle_command(const char *text) {
         live_data_request_recording(true);
     } else if (strcmp(text, "rec off") == 0) {
         live_data_request_recording(false);
-#if CONFIG_CAN_UDS_REQUESTS
+#if CONFIG_CAN_TX_MODE
     } else if (strncmp(text, "uds ", 4) == 0) {
         esp_err_t err = uds_client_request(text + 4);
         if (err != ESP_OK) {

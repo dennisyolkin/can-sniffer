@@ -17,7 +17,7 @@
 #include "live_data.h"
 #include "sd_logger.h"
 #include "status_led.h"
-#if CONFIG_CAN_UDS_REQUESTS
+#if CONFIG_CAN_TX_MODE
 #include "uds_client.h"
 #endif
 #include "web_server.h"
@@ -29,8 +29,8 @@
 #define CAN_SE_GPIO GPIO_NUM_23
 #define CAN_BITRATE 500000
 
-#if CONFIG_CAN_ACK_FRAMES
-#define CAN_MODE_NAME "normal"
+#if CONFIG_CAN_TX_MODE
+#define CAN_MODE_NAME "tx"
 #else
 #define CAN_MODE_NAME "listen_only"
 #endif
@@ -59,7 +59,7 @@ static unsigned rx_read;
 
 static volatile uint32_t rx_dropped;
 // In listen-only mode the ESP32 driver forces REC to 128 (errata workaround against error frames), so the state is
-// always error_passive and says nothing about bus health; use bus_errors for that. In normal mode (CAN_ACK_FRAMES)
+// always error_passive and says nothing about bus health; use bus_errors for that. In TX mode (normal TWAI mode)
 // it is meaningful: anything but error_active means this node has seen, and likely sent, error frames.
 static volatile twai_error_state_t bus_state = TWAI_ERROR_ACTIVE;
 
@@ -110,7 +110,7 @@ static bool IRAM_ATTR on_rx_done(
     return higher_priority_task_woken == pdTRUE;
 }
 
-#if CONFIG_CAN_UDS_REQUESTS
+#if CONFIG_CAN_TX_MODE
 static bool IRAM_ATTR on_tx_done(
     twai_node_handle_t node,
     const twai_tx_done_event_data_t *edata,
@@ -165,7 +165,7 @@ static void halt_with_error(const char *what, esp_err_t err) {
 }
 
 static esp_err_t transceiver_init(void) {
-#if CONFIG_CAN_ACK_FRAMES
+#if CONFIG_CAN_TX_MODE
     // The TWAI driver takes TX over when the node is created. Until then the internal pull-up keeps it recessive
     // (the transceiver's D input is high impedance). An output here would reserve the pin, and the driver would then
     // warn "GPIO 27 is not usable".
@@ -189,7 +189,7 @@ static esp_err_t transceiver_init(void) {
         return err;
     }
 
-#if CONFIG_CAN_ACK_FRAMES
+#if CONFIG_CAN_TX_MODE
     err = gpio_config(&tx_config);
 #else
     err = gpio_set_level(CAN_TX_GPIO, 1);
@@ -235,7 +235,7 @@ static esp_err_t twai_start(void) {
 
     twai_onchip_node_config_t config = {
         .io_cfg = {
-#if CONFIG_CAN_ACK_FRAMES
+#if CONFIG_CAN_TX_MODE
             .tx = CAN_TX_GPIO,
 #else
             .tx = -1,
@@ -247,14 +247,12 @@ static esp_err_t twai_start(void) {
         .bit_timing.bitrate = CAN_BITRATE,
         // 1 MHz: frame timestamps are in microseconds since boot, same clock as esp_timer_get_time().
         .timestamp_resolution_hz = 1000000,
-#if CONFIG_CAN_ACK_FRAMES
-        // The driver requires a TX queue outside listen-only mode. Nothing is ever queued: this build only ACKs.
-        // Bus-off is not recovered from: it means this node kept disturbing the bus, so it stays off until reboot.
+#if CONFIG_CAN_TX_MODE
+        // One request at a time (uds_client). Bus-off is not recovered from: it means this node kept disturbing the
+        // bus, so it stays off until reboot.
         .tx_queue_depth = 1,
-#if CONFIG_CAN_UDS_REQUESTS
         // Our own requests come back through RX, so can.log and the live table show them in their place on the bus.
         .flags.enable_loopback = true,
-#endif
 #else
         .flags.enable_listen_only = true,
 #endif
@@ -269,7 +267,7 @@ static esp_err_t twai_start(void) {
         .on_rx_done = on_rx_done,
         .on_state_change = on_state_change,
         .on_error = on_error,
-#if CONFIG_CAN_UDS_REQUESTS
+#if CONFIG_CAN_TX_MODE
         .on_tx_done = on_tx_done,
 #endif
     };
@@ -477,7 +475,7 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "TWAI running at %d bit/s, mode %s", CAN_BITRATE, CAN_MODE_NAME);
 
-#if CONFIG_CAN_UDS_REQUESTS
+#if CONFIG_CAN_TX_MODE
     // Without it the page simply gets no request buttons; receiving goes on.
     bool uds_ready = uds_client_init(can_node) == ESP_OK;
 #endif
@@ -512,7 +510,7 @@ void app_main(void) {
             live_data_update(&entry);
             // Returns at once when not recording or after a write failure; the LED and the page report that.
             sd_logger_log_can(&entry);
-#if CONFIG_CAN_UDS_REQUESTS
+#if CONFIG_CAN_TX_MODE
             if (uds_ready) {
                 uds_client_on_frame(&entry);
             }
@@ -520,7 +518,7 @@ void app_main(void) {
         }
 
         int64_t now = esp_timer_get_time();
-#if CONFIG_CAN_UDS_REQUESTS
+#if CONFIG_CAN_TX_MODE
         if (uds_ready) {
             uds_client_poll(now, bus_state == TWAI_ERROR_ACTIVE);
         }

@@ -12,15 +12,10 @@ foreach(name sdkconfig.defaults sdkconfig.secrets)
         list(APPEND defaults_files "${name}")
     endif()
 endforeach()
-# Test build that ACKs frames on the car's bus (CONFIG_CAN_ACK_FRAMES), kept apart from the car image:
-#   idf.py -B build-ack -D SDKCONFIG=build-ack/sdkconfig -D CAN_ACK_BUILD=1 build
-if(CAN_ACK_BUILD)
-    list(APPEND defaults_files "sdkconfig.ack")
-endif()
-# Diagnostic request test build (CONFIG_CAN_UDS_REQUESTS, implies the ACK build):
-#   idf.py -B build-uds -D SDKCONFIG=build-uds/sdkconfig -D CAN_UDS_BUILD=1 build
-if(CAN_UDS_BUILD)
-    list(APPEND defaults_files "sdkconfig.uds")
+# TX mode test build (CONFIG_CAN_TX_MODE), kept apart from the car image:
+#   idf.py -B build-tx -D SDKCONFIG=build-tx/sdkconfig -D CAN_TX_BUILD=1 build
+if(CAN_TX_BUILD)
+    list(APPEND defaults_files "sdkconfig.tx")
 endif()
 set(SDKCONFIG_DEFAULTS "${defaults_files}")
 

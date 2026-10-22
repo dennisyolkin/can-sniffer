@@ -35,10 +35,10 @@ Standalone CAN bus logger built on a LilyGO T-CAN485 (ESP32) plugged into the ca
 - **Language and framework:** plain **C**, **ESP-IDF v6.1**. No Arduino, no C++.
 - **Never disable `enable_listen_only` and never call `twai_node_transmit`** unless the user
   explicitly asks. This is a real car on the road. The one exception, requested by the user, is the separate
-  `CONFIG_CAN_ACK_FRAMES` test build (normal mode: ACKs frames, still never transmits), and on top of it the
-  `CONFIG_CAN_UDS_REQUESTS` build: `uds_client` sends only its fixed, allowlisted read-only requests
-  (UDS `0x3E`/`0x22`, OBD-II mode `01`, on diagnostic IDs that never appear in the car's traffic). Both stay off by
-  default and must never become the default car image. Never send on an ID the car itself uses.
+  `CONFIG_CAN_TX_MODE` test build: normal mode (ACKs every frame), and `uds_client` sends only its fixed,
+  allowlisted read-only requests (UDS `0x3E`/`0x22`, OBD-II mode `01`, on diagnostic IDs that never appear in the
+  car's traffic). It stays off by default and must never become the default car image. Never send on an ID the car
+  itself uses.
 - Don't add console output to the hot path (ISR, RX, SD writing). Logging during init or errors is
   acceptable during development. It must be removable via sdkconfig (log level), not by
   editing code.
@@ -54,7 +54,7 @@ SN65HVD231 (3.3 V).
 
 | Function        | GPIO | Notes |
 |-----------------|------|-------|
-| CAN TX          | 27   | Held HIGH (recessive) as a plain GPIO; **not** routed to TWAI (`io_cfg.tx = -1`). ACK test build: pulled up, then routed to TWAI. |
+| CAN TX          | 27   | Held HIGH (recessive) as a plain GPIO; **not** routed to TWAI (`io_cfg.tx = -1`). TX mode build: pulled up, then routed to TWAI. |
 | CAN RX          | 26   | |
 | CAN SE / Rs     | 23   | Transceiver slope control. Driven **LOW** for high-speed mode (as in LilyGO's examples). |
 | SD MISO         | 2    | Strapping pin. The SD card can interfere with flashing. |
@@ -120,7 +120,7 @@ TWAI ISR (on_rx_done) ──► ring of rx_slot_t + counting semaphores ──�
 | [main/wifi_ap.c](main/wifi_ap.c) / [.h](main/wifi_ap.h) | NVS, netif, SoftAP (menuconfig → Live view Wi-Fi; password in `sdkconfig.secrets`), mDNS `can-sniffer.local`. |
 | [main/web_server.c](main/web_server.c) / [.h](main/web_server.h) | httpd on core 1: `GET /` serves [main/web/index.html](main/web/index.html) (gzipped at build time), `/ws` pushes the frame table (binary, 5 Hz) and status (JSON, 1 Hz) and takes `rec on`/`rec off`/`mark <label>`. |
 | [main/web/index.html](main/web/index.html) | The page: no frameworks. Its signal table (JSON, PSA-RE bit notation) is the decoding for the live view; check it with `tools/check_page_signals.py`. |
-| [main/uds_client.c](main/uds_client.c) / [.h](main/uds_client.h) | `CONFIG_CAN_UDS_REQUESTS` build only (not compiled otherwise): a fixed list of single-frame diagnostic requests sent one at a time from the page, reply collection, page log and `uds_*` events. See [docs/live-view.md](docs/live-view.md). |
+| [main/uds_client.c](main/uds_client.c) / [.h](main/uds_client.h) | `CONFIG_CAN_TX_MODE` build only (not compiled otherwise): a fixed list of single-frame diagnostic requests sent one at a time from the page, reply collection, page log and `uds_*` events. See [docs/live-view.md](docs/live-view.md). |
 | [main/status_led.c](main/status_led.c) / [.h](main/status_led.h) | WS2812 status LED: `set`, timed `show_for` with a FreeRTOS one-shot timer, a "priority" flag that blocks other updates. |
 
 TWAI uses the **new v6 driver** (`esp_driver_twai`: `esp_twai.h`, `esp_twai_onchip.h`,
@@ -150,8 +150,8 @@ Each recording (REC switched on) creates `/sdcard/can-sniff/<boot id>-<nn>/`: th
   (`write_max_us=… sync_max_us=… buffers_min_free=n/total`, maxima and minimum over that second).
   Counters (`*_dropped_total`, `bus_errors`) start from zero in each session. `mark` lines (`<n> <label>`) come
   from the page's Mark button, stamped with the time of the press, so they can be up to a second out of order.
-  Test builds add `can_mode`, and the UDS build adds `uds_tx`/`uds_rx` (frame as `ID#DATA`), `uds_done`,
-  `uds_tx_failed` and `uds_refused`.
+  `can_mode` (`listen_only` or `tx`) opens each session; the TX mode build adds `uds_tx`/`uds_rx` (frame as
+  `ID#DATA`), `uds_done`, `uds_tx_failed` and `uds_refused`.
 
 Throughput budget: 500 kbit/s saturated is about 4,000 frames/s, or roughly 150 KB/s of text. The
 car's bus runs about 1,550 frames/s (~60 KB/s). Average bandwidth is not the problem; card latency is.
@@ -188,15 +188,14 @@ idf.py -B build -p /dev/tty.usbserial-595D0130391 flash monitor   # Ctrl-] to ex
 idf.py -B build menuconfig
 ```
 
-- ACK test build (normal mode, see Hard rules), in its own directory so the car image's `sdkconfig` stays untouched:
-  `idf.py -B build-ack -D SDKCONFIG=build-ack/sdkconfig -D CAN_ACK_BUILD=1 build`, then flash with the same
-  `-B`/`-D` options. The page shows a red "ACK" badge, and `events.csv` logs `can_mode=normal`. In this mode
-  `bus_state` means something (it should stay `error_active`), and any bus error may have reached the car's bus.
-  Bus-off is not recovered from until reboot.
-- Diagnostic request build (implies ACK): `idf.py -B build-uds -D SDKCONFIG=build-uds/sdkconfig -D CAN_UDS_BUILD=1
-  build`. Buttons in the Raw tab's "Diagnostics" block, header badge "TX".
-- After flashing a test build, check the badge on the page: `-B build` must show none. Its `sdkconfig` must not
-  contain `CONFIG_CAN_ACK_FRAMES=y` (menuconfig can set it there by mistake).
+- Two modes, one option (`CONFIG_CAN_TX_MODE`, menuconfig → CAN bus): **listen-only** (the car image, `-B build`)
+  and **TX mode** (see Hard rules), built in its own directory so the car image's `sdkconfig` stays untouched:
+  `idf.py -B build-tx -D SDKCONFIG=build-tx/sdkconfig -D CAN_TX_BUILD=1 build`, then flash with the same
+  `-B`/`-D` options. The page shows a red "TX" badge and the request buttons (Raw tab, "Diagnostics"), and
+  `events.csv` logs `can_mode=tx`. In TX mode `bus_state` means something (it should stay `error_active`), and any
+  bus error may have reached the car's bus. Bus-off is not recovered from until reboot.
+- After flashing, check the page: the car image (`-B build`) shows no badge. Its `sdkconfig` must not contain
+  `CONFIG_CAN_TX_MODE=y` (menuconfig can set it there by mistake).
 - Pass `-B build`: `CMakePresets.json` (used by the VS Code extension) otherwise makes `idf.py` configure into a
   broken `${sourceDir}/build/default` directory.
 - `sdkconfig` is git-ignored. Any config that matters goes in **`sdkconfig.defaults`** (flash size and partition

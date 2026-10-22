@@ -33,24 +33,18 @@ endmenu
 
 menu "CAN bus"
 
-    config CAN_ACK_FRAMES
-        bool "Normal mode: ACK frames on the car's bus (test build only)"
+    config CAN_TX_MODE
+        bool "TX mode: take part in the car's bus and send diagnostic requests (test build only)"
         default n
         help
-            Leaves listen-only mode: TX is routed to the TWAI controller, so the node ACKs every frame it receives
-            and sends error frames when it sees a bus error. The firmware still never transmits a frame of its own.
+            Off (the car image): listen-only. TX is never routed to the TWAI controller; the node sends nothing,
+            not even ACKs.
 
-            This makes the board an active participant on the car's bus. Keep it off for the normal car image;
-            enable it only for a deliberate test (parked, ignition on), and stop if bus errors appear.
+            On: normal mode. The node ACKs every frame, sends error frames when it sees a bus error, and the page
+            gets buttons for a fixed list of read-only, single-frame diagnostic requests (uds_client.c, allowlisted
+            to UDS 0x3E/0x22 and OBD-II mode 01). Replies are shown on the page and logged to events.csv; the node
+            receives its own requests back (loopback), so they also appear in can.log.
 
-    config CAN_UDS_REQUESTS
-        bool "Send read-only diagnostic requests from the page (test build only)"
-        depends on CAN_ACK_FRAMES
-        default n
-        help
-            Adds buttons to the page that send a fixed list of single-frame diagnostic requests (uds_client.c):
-            UDS TesterPresent (0x3E) and ReadDataByIdentifier (0x22), OBD-II mode 01. Nothing else can be sent.
-            Replies are shown on the page and logged to events.csv. The node receives its own requests back
-            (loopback), so they also appear in can.log.
+            Use it only for deliberate tests (parked, ignition on), and stop if bus errors appear.
 
 endmenu

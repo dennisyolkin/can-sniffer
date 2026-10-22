@@ -9,7 +9,7 @@
 #include "sd_logger.h"
 
 // A fixed list of read-only diagnostic requests (UDS 0x3E/0x22, OBD-II mode 01), sent one at a time on request from
-// the page. Only in the CONFIG_CAN_UDS_REQUESTS build. Single-frame requests only; replies longer than one frame are
+// the page. Only in the CONFIG_CAN_TX_MODE build. Single-frame requests only; replies longer than one frame are
 // logged but not followed (no ISO-TP flow control).
 
 #define UDS_CLIENT_LOG_LEN 16

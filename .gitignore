@@ -19,8 +19,7 @@
 # Build artifacts and directories
 **/build/
 build/
-build-ack/
-build-uds/
+build-*/
 *.o
 *.a
 *.out

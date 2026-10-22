@@ -1,3 +1,0 @@
-# Extra defaults for the diagnostic request test build (see CMakeLists.txt). Implies the ACK build.
-CONFIG_CAN_ACK_FRAMES=y
-CONFIG_CAN_UDS_REQUESTS=y
