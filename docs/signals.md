@@ -16,6 +16,8 @@ Sources:
 - **trip3** (2026-10-14): ~5 min, **100 % of frames logged** (no drops). Bus asleep twice, ready on, R, D,
   ~12 m drive, off, every door and the boot, lock/unlock by key fob and keyless, lights from the fob.
   Action log under "Ground truth (trip3)".
+- **diag-bms-1** (2026-10-29): parked, Ready, TX mode build; "Read all" sent the 22 BMS `0x22` requests while
+  the broadcast frames were recorded, so every DID can be compared with its broadcast twin.
 - **PSA-RE** ([github.com/prototux/PSA-RE](https://github.com/prototux/PSA-RE)): community database of PSA
   frames in YAML. The ë-C4 is car code `C41`, architecture `AEE2010.electric` (child of `.ev`, `.full`).
   Decode a capture with `tools/psare.py <session> <PSA-RE checkout>`; it resolves the variant chain.
@@ -26,6 +28,10 @@ The OBD pins 6/14 carry PSA's **HS1 (powertrain) bus**: 79 of our 87 IDs are def
 `AEE2010.{electric,ev,full}/HS.HS1`, and the decoded values make sense. Not in PSA-RE:
 `302 352 40B 42B 44B 494 4A2 66B` (see "IDs not in PSA-RE"). Across trip1-3 we have seen 96 IDs; some only
 appear while the car sleeps, wakes or locks.
+
+The ECUs on this bus answer **UDS diagnostic requests sent from the OBD port** directly (no gateway in between):
+VCU `6A2`→`682`, BMS `6B4`→`694`, ABS `6AD`→`68D`. The BSI (`752`), the cluster (`75F`) and OBD-II (`7DF`) never
+answer (docs/live-view.md, "Transmitting").
 
 87 IDs, all 11-bit, ~1,550 frames/s, no bus errors. Periods: 10 ms (`208 262 2F5 305 349 3CD`),
 20 ms (`2EB 302 30D 334 348 34D 3AD 40D`), 40 ms, 50 ms, 100 ms, ~1 s (5xx/7xx). Many frames end or start
@@ -47,9 +53,35 @@ with a 4-bit checksum + 4-bit process counter.
 | 583 | b5, b6 | Probe counts: 54 temperature, 108 voltage | | verified | Not outside temperature, as I first guessed |
 | 583 | b3 bit 5 | "High battery temperature alert" | | doubtful | Set for the whole trip at 12 °C; probably mislabelled |
 | 522 | b4 | HV battery average temperature | raw − 40 °C | PSA-RE | 12 °C |
-| 454 | | **SoH capacity 91 %, SoH resistance 91 %**, main relay counter 6200, DC-charge relay counter 800, lifetime 11,375 Ah | | PSA-RE | Constant (sent ~1/s). Check against a dealer/app SoH reading |
+| 454 | | **SoH capacity 91 %, SoH resistance 91 %**, main relay counter 6200, DC-charge relay counter 800, lifetime 11,375 Ah | | PSA-RE | Constant (sent ~1/s). SoH capacity matches BMS DID `D860` (90.94 %). Lifetime 11,375 Ah × ~390 V ≈ 4.4 MWh over 25,832 km ≈ 170 Wh/km: plausible as lifetime discharge |
 | 3A8 | b0, b1, b2 | Consumed / balance / regenerated energy counters | ×2 Wh | PSA-RE | Wrap around |
 | 462 | | Charge mode, fast-charge stop request | enum | PSA-RE | "No load" while driving |
+
+## Traction battery over UDS (BMS diagnostics)
+
+`ReadDataByIdentifier` (`0x22`) to the BMS: request `6B4#0322<DID>`, reply `694#0n62<DID><value>` (single frame,
+value big-endian, PSA-RE `diag/AEE2010.ev/TBMU/BMU_CTE1`). Byte offsets below are within the value. Status
+**verified** = same value as the broadcast signal in the same capture (diag-bms-1).
+
+| DID | Value | Decode | Status | diag-bms-1 (broadcast in brackets) |
+|-----|-------|--------|--------|-------------------------------------|
+| D810 | SoC | 2 B ×1/512 % | verified | 33.79 % (`3A8`/`5C3` 33.8) |
+| D860 | **SoH** (PSA-RE: "capacity to supply and store energy") | value b1-b2 of 3, ×1/16 % | verified | **90.94 %** (`454` SoH capacity 91). b0 = 01, unknown |
+| D815 | Pack voltage | 2 B ×1/16 V | verified | 388.25 V (`5C3` 388) |
+| D43D | Average cell voltage | 2 B ×0.001 V | verified | 3.595 V; × 108 = 388.3 V |
+| D86F / D870 | Lowest / highest cell voltage | 2 B ×0.001 V | verified | 3.586 / 3.598 V (`334` 3.586 / 3.599) |
+| D43C / D43B | Lowest / highest cell number | 1 B, **0-based** | verified | 89 / 1 (`5A3` raw 89 / 1-2; the page shows both 1-based) |
+| D877 / D87D / D817 | Average / min / max temperature | 1 B −40 °C | verified | 12 / 12 / 13 °C (`522` 12, `583` 12, `3F4` 12-13) |
+| D47A | Insulation resistance | 4 B kΩ | verified | 32,343 kΩ (`5A3` 32,343) |
+| D822 | 12 V battery voltage (as the BMS sees it) | 2 B ×0.001 V | verified | 14.63 V (`50D` 14.60-14.75) |
+| D878 | Temperature spread | 1 B °C | PSA-RE | 1 °C; fits max − min |
+| D816 | Current | 4 B ×1/64 −1200 A | PSA-RE | +2.81 A parked in Ready (~1.1 kW: DC/DC at 14.6 V + climate); positive = discharge |
+| D871 / D873 | Max charge / discharge power for 10 s | 4 B ×1/128 −500 kW | PSA-RE | −132.7 / +125.4 kW at 34 %, 12 °C (charge is negative) |
+| D811 | Battery status | enum (0 = normal) | PSA-RE | normal |
+| D86D | Cell balancing status | enum (0 = correct) | PSA-RE | correct |
+| D865 | Energy | 2 B ×1/64 kWh | doubtful | 12.66 kWh at 33.8 % → ~37.5 kWh full, below the ~42 kWh expected (46 kWh × SoH). Maybe excludes a bottom reserve |
+| D413 | "Cells minimum capacity" | 2 B ×1/512 % | doubtful | 32.8 %, next to SoC 33.8: more likely the weakest cell's SoC |
+| F18B | BMS manufacturing date | 3 B BCD | PSA-RE | `22 04 22`: 22 April 2022, fits the car's 2022 build |
 
 ## Driving
 

@@ -25,7 +25,7 @@ typedef enum {
 typedef struct {
     uint32_t t_ms;
     uint8_t kind;  // uds_log_kind_t
-    uint8_t request;
+    uint8_t request;  // Index into the request table.
     uint16_t id;
     uint8_t len;
     uint8_t data[8];

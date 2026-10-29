@@ -27,10 +27,37 @@ static const char *TAG = "uds_client";
 // captures), so a request cannot collide with an ECU's frame. Padding is 0x00.
 // Only ECUs that answered from the OBD port (tx-logs-2) are listed; the BSI, the cluster and OBD-II never did
 // (docs/live-view.md, "Transmitting").
+// BMS reads: DIDs from PSA-RE TBMU/BMU_CTE1 whose value is at most 4 bytes, so the reply (62 + DID + value) fits in
+// one frame. The page decodes them; the label's "ECU:" prefix groups the buttons.
+#define BMS_READ(name, label, did) \
+    {name, "BMS: " label, 0x6B4, 0x694, 0x694, {0x03, 0x22, (uint8_t) ((did) >> 8), (uint8_t) ((did) & 0xFF)}}
+
 static const uds_request_t requests[] = {
     {"vcu_tp", "VCU: TesterPresent", 0x6A2, 0x682, 0x682, {0x02, 0x3E, 0x00}},
-    {"bms_tp", "BMS: TesterPresent", 0x6B4, 0x694, 0x694, {0x02, 0x3E, 0x00}},
     {"abs_tp", "ABS: TesterPresent", 0x6AD, 0x68D, 0x68D, {0x02, 0x3E, 0x00}},
+    {"bms_tp", "BMS: TesterPresent", 0x6B4, 0x694, 0x694, {0x02, 0x3E, 0x00}},
+    BMS_READ("bms_d810", "SoC", 0xD810),
+    BMS_READ("bms_d860", "SoH", 0xD860),
+    BMS_READ("bms_d413", "Min cell capacity", 0xD413),
+    BMS_READ("bms_d865", "Energy", 0xD865),
+    BMS_READ("bms_d815", "Pack voltage", 0xD815),
+    BMS_READ("bms_d816", "Current", 0xD816),
+    BMS_READ("bms_d43d", "Avg cell V", 0xD43D),
+    BMS_READ("bms_d86f", "Lowest cell V", 0xD86F),
+    BMS_READ("bms_d870", "Highest cell V", 0xD870),
+    BMS_READ("bms_d43c", "Lowest cell no.", 0xD43C),
+    BMS_READ("bms_d43b", "Highest cell no.", 0xD43B),
+    BMS_READ("bms_d877", "Avg temp", 0xD877),
+    BMS_READ("bms_d87d", "Min temp", 0xD87D),
+    BMS_READ("bms_d817", "Max temp", 0xD817),
+    BMS_READ("bms_d878", "Temp spread", 0xD878),
+    BMS_READ("bms_d871", "Charge limit 10 s", 0xD871),
+    BMS_READ("bms_d873", "Discharge limit 10 s", 0xD873),
+    BMS_READ("bms_d811", "Battery status", 0xD811),
+    BMS_READ("bms_d86d", "Balancing", 0xD86D),
+    BMS_READ("bms_d47a", "Insulation", 0xD47A),
+    BMS_READ("bms_d822", "12 V battery", 0xD822),
+    BMS_READ("bms_f18b", "Manufacturing date", 0xF18B),
 };
 #define REQUEST_COUNT (sizeof(requests) / sizeof(requests[0]))
 

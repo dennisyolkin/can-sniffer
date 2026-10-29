@@ -109,6 +109,32 @@ Requests (`uds_client.c`, allowlisted in C to UDS `0x3E`, `0x22` and OBD-II mode
 | VCU: TesterPresent | `6A2#023E000000000000` | `682#027E00` |
 | BMS: TesterPresent | `6B4#023E000000000000` | `694#027E00` |
 | ABS: TesterPresent | `6AD#023E000000000000` | `68D#027E00` |
+| BMS: 22 reads (below) | `6B4#0322xxxx00000000` | `694#0n62xxxx` + value, or `694#037F22nn` |
+
+BMS reads (`0x22`, one DID per request; PSA-RE `TBMU/BMU_CTE1`, value ≤ 4 bytes so the reply is one frame). The
+page decodes them (`DIDS` in `index.html`: big-endian value at byte offset `o`, `raw × f + off`), keeps the newest
+value per DID, and "Read all" sends them one after another (next one when the previous is done, or after 3 s).
+Checked against the broadcast frames in diag-bms-1: every request answered, and the values that have a broadcast
+twin match it (details and status per DID in docs/signals.md, "Traction battery over UDS"):
+
+| DID | Value | Encoding |
+|-----|-------|----------|
+| D810 | SoC | 2 B × 1/512 % |
+| D860 | SoH ("capacity to supply and store energy") | bytes 1–2 of 3, × 1/16 % |
+| D413 | Cells minimum capacity | 2 B × 1/512 % |
+| D865 | Energy | 2 B × 1/64 kWh |
+| D815 | Pack voltage | 2 B × 1/16 V |
+| D816 | Current | 4 B × 1/64 − 1200 A |
+| D43D / D86F / D870 | Average / lowest / highest cell voltage | 2 B × 0.001 V |
+| D43C / D43B | Number of the lowest / highest cell | 1 B, 0-based (page shows +1) |
+| D877 / D87D / D817 | Average / min / max temperature | 1 B − 40 °C |
+| D878 | Temperature spread | 1 B °C |
+| D871 / D873 | Max charge / discharge power for 10 s | 4 B × 1/128 − 500 kW |
+| D811 | Battery status | enum: normal, downgraded, … |
+| D86D | Cell balancing status | enum: correct, incorrect |
+| D47A | Insulation resistance | 4 B kΩ |
+| D822 | 12 V battery voltage as the BMS sees it | 2 B × 0.001 V |
+| F18B | ECU manufacturing date | 3 B BCD |
 
 Tried from the OBD port and removed because nothing ever answered (addresses from PSA-RE; kept here in case another
 port, session or address makes them work):

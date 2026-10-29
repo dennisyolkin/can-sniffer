@@ -29,8 +29,9 @@
 #define FRAMES_MAGIC 'F'
 #define FRAMES_VERSION 1
 #define STATUS_JSON_MAX 512
-// Request list (about 60 characters per request) plus UDS_CLIENT_LOG_LEN entries of about 110 characters each.
-#define UDS_JSON_MAX 3072
+// Request list (about 60 characters per request, ~25 requests) plus UDS_CLIENT_LOG_LEN entries of about 110
+// characters each.
+#define UDS_JSON_MAX 4096
 // Commands from the page are short ("rec on", "mark <label>"); anything longer closes the connection.
 #define MAX_INCOMING_LEN 64
 #define MAX_CLIENTS CONFIG_LWIP_MAX_SOCKETS

@@ -49,7 +49,11 @@
   #active-badge[hidden] { display: none; }
 
   #uds[hidden] { display: none; }
-  #uds-buttons { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .uds-group { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-bottom: .5rem; }
+  .uds-group .lbl { width: 100%; }
+  .uds-group button.run { border-color: var(--accent); color: var(--accent); }
+  #uds-values { display: grid; grid-template-columns: max-content 1fr; gap: .15rem .8rem; font-size: .9rem; margin: .3rem 0 .6rem; }
+  #uds-values .t { color: var(--muted); font-size: .8rem; }
   #uds-log { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; margin-top: .5rem; }
   #uds-log div { padding: .1rem 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #uds-log .pos { color: var(--good); }
@@ -290,6 +294,7 @@
   <div id="uds" hidden>
     <h2>Diagnostics</h2>
     <div id="uds-buttons"></div>
+    <div id="uds-values"></div>
     <div id="uds-log"></div>
   </div>
   <h2>Frames</h2>
@@ -745,11 +750,61 @@ const NRC = {
 
 const hex = (n, w = 2) => n.toString(16).toUpperCase().padStart(w, "0");
 
-// One line per log entry; replies are explained as ISO-TP single frame + UDS/OBD response.
-function udsLine(e) {
+// ReadDataByIdentifier values, from PSA-RE diag/AEE2010.ev/TBMU/BMU_CTE1; checked against the broadcast frames in
+// docs/signals.md ("Traction battery over UDS").
+// o/l: byte offset and length of the big-endian value after the DID; value = raw * f + off.
+const DIDS = {
+  0xD810: { n: "SoC", o: 0, l: 2, f: 1 / 512, u: "%", d: 1 },
+  0xD860: { n: "SoH", o: 1, l: 2, f: 1 / 16, u: "%", d: 2 },
+  0xD413: { n: "Min cell capacity", o: 0, l: 2, f: 1 / 512, u: "%", d: 1 },
+  0xD865: { n: "Energy", o: 0, l: 2, f: 1 / 64, u: "kWh", d: 2 },
+  0xD815: { n: "Pack voltage", o: 0, l: 2, f: 1 / 16, u: "V", d: 1 },
+  0xD816: { n: "Current", o: 0, l: 4, f: 1 / 64, off: -1200, u: "A", d: 2 },
+  0xD43D: { n: "Avg cell V", o: 0, l: 2, f: 0.001, u: "V", d: 3 },
+  0xD86F: { n: "Lowest cell V", o: 0, l: 2, f: 0.001, u: "V", d: 3 },
+  0xD870: { n: "Highest cell V", o: 0, l: 2, f: 0.001, u: "V", d: 3 },
+  // 0-based like 5A3's; shown 1-based like the battery tab.
+  0xD43C: { n: "Lowest cell no.", o: 0, l: 1, off: 1 },
+  0xD43B: { n: "Highest cell no.", o: 0, l: 1, off: 1 },
+  0xD877: { n: "Avg temp", o: 0, l: 1, off: -40, u: "°C" },
+  0xD87D: { n: "Min temp", o: 0, l: 1, off: -40, u: "°C" },
+  0xD817: { n: "Max temp", o: 0, l: 1, off: -40, u: "°C" },
+  0xD878: { n: "Temp spread", o: 0, l: 1, u: "°C" },
+  0xD871: { n: "Charge limit 10 s", o: 0, l: 4, f: 1 / 128, off: -500, u: "kW", d: 1 },
+  0xD873: { n: "Discharge limit 10 s", o: 0, l: 4, f: 1 / 128, off: -500, u: "kW", d: 1 },
+  0xD811: { n: "Battery status", o: 0, l: 1, e: ["normal", "downgraded", "downgraded, max power needed",
+    "opening internal switches", "internal switch open", "not available"] },
+  0xD86D: { n: "Balancing", o: 0, l: 1, e: ["correct", "incorrect"] },
+  0xD47A: { n: "Insulation", o: 0, l: 4, u: "kΩ" },
+  0xD822: { n: "12 V battery", o: 0, l: 2, f: 0.001, u: "V", d: 2 },
+  0xF18B: { n: "Manufacturing date", o: 0, l: 3, bcd: true },
+};
+
+function frameBytes(e) {
   const b = [];
-  for (let i = 0; i < 16; i += 2) b.push(parseInt(e.data.slice(i, i + 2), 16));
-  const frame = hex(e.id, 3) + " " + b.slice(0, e.len).map(x => hex(x)).join(" ");
+  for (let i = 0; i < 2 * e.len; i += 2) b.push(parseInt(e.data.slice(i, i + 2), 16));
+  return b;
+}
+
+// Positive ReadDataByIdentifier reply (single frame: len, 62, DID hi, DID lo, value…) → { did, name, text }.
+function decodeDid(b) {
+  if (b.length < 4 || b[0] >> 4 !== 0 || b[1] !== 0x62) return null;
+  const did = (b[2] << 8) | b[3], spec = DIDS[did];
+  if (!spec) return null;
+  const value = b.slice(4, 1 + b[0]).slice(spec.o, spec.o + spec.l);
+  if (value.length < spec.l) return { did, name: spec.n, text: "short reply" };
+  if (spec.bcd) return { did, name: spec.n, text: value.map(x => hex(x)).join(" ") };
+  let raw = 0;
+  for (const x of value) raw = raw * 256 + x;  // Not <<: a 4-byte value would turn negative.
+  if (spec.e) return { did, name: spec.n, text: spec.e[raw] || "0x" + hex(raw) };
+  const v = raw * (spec.f || 1) + (spec.off || 0);
+  return { did, name: spec.n, text: v.toFixed(spec.d || 0) + (spec.u ? " " + spec.u : "") };
+}
+
+// One line per log entry; replies are explained as ISO-TP single frame + UDS response.
+function udsLine(e) {
+  const b = frameBytes(e);
+  const frame = hex(e.id, 3) + " " + b.map(x => hex(x)).join(" ");
   const t = (e.t / 1000).toFixed(2) + " s ";
   if (e.kind === "tx") return [t + "→ " + frame, ""];
   if (e.kind === "done") return [t + `done: ${e.len} repl${e.len === 1 ? "y" : "ies"}`, "meta"];
@@ -762,27 +817,112 @@ function udsLine(e) {
     what = `negative: ${NRC[b[3]] || "NRC " + hex(b[3])}`;
     cls = b[3] === 0x78 ? "meta" : "neg";
   } else {
-    what = "positive";
+    const v = decodeDid(b);
+    what = v ? `${v.name} = ${v.text}` : "positive";
     cls = "pos";
   }
   return [t + "← " + frame + " · " + what, cls];
 }
 
+const FINAL_KINDS = ["done", "tx_failed", "refused"];
+const udsValues = new Map();  // DID → { name, text, t }, newest reply per DID; survives the 16-entry board log
+let readAll = null;           // { queue: [names], current, after (board ms), sentAt (Date.now()) }
+
+const udsBusy = () => {
+  const last = uds && uds.log[uds.log.length - 1];
+  return !!last && !FINAL_KINDS.includes(last.kind);
+};
+
+function sendNextRead() {
+  if (!readAll.queue.length) { readAll = null; return; }
+  const last = uds.log[uds.log.length - 1];
+  readAll.current = readAll.queue.shift();
+  readAll.after = last ? last.t : -1;
+  readAll.sentAt = Date.now();
+  send("uds " + readAll.current);
+}
+
+// Called for every "uds" message: keeps the newest decoded values and drives "Read all", one request at a time.
+function onUds(msg) {
+  uds = msg;
+  for (const e of msg.log) {
+    if (e.kind !== "rx") continue;
+    const v = decodeDid(frameBytes(e));
+    const old = v && udsValues.get(v.did);
+    if (v && (!old || old.t <= e.t)) udsValues.set(v.did, { ...v, t: e.t });
+  }
+  if (!readAll) return;
+  const finished = msg.log.some(e => e.req === readAll.current && FINAL_KINDS.includes(e.kind) && e.t > readAll.after);
+  // The board ignores a request while another is in flight; don't wait forever for one it dropped.
+  if ((finished || Date.now() - readAll.sentAt > 3000) && !udsBusy()) sendNextRead();
+}
+
+function toggleReadAll(names) {
+  if (readAll) { readAll = null; dirty = true; return; }
+  readAll = { queue: names.slice() };
+  sendNextRead();
+  dirty = true;
+}
+
 function renderUds() {
   $("#uds").hidden = !uds;
   if (!uds) return;
-  const last = uds.log[uds.log.length - 1];
-  const busy = last && (last.kind === "tx" || last.kind === "rx");
+  if (readAll && Date.now() - readAll.sentAt > 3000 && !udsBusy()) sendNextRead();
+  const online = ws && ws.readyState === WebSocket.OPEN;
   const box = $("#uds-buttons");
-  if (box.childElementCount !== uds.requests.length) {
-    box.replaceChildren(...uds.requests.map(r => {
-      const b = document.createElement("button");
-      b.textContent = r.label;
-      b.onclick = () => send("uds " + r.name);
-      return b;
+  // Built once per request list; the label's "ECU: " prefix groups the buttons.
+  if (box.dataset.count !== String(uds.requests.length)) {
+    box.dataset.count = uds.requests.length;
+    const groups = new Map();
+    for (const r of uds.requests) {
+      const [group, text] = r.label.includes(": ") ? r.label.split(": ", 2) : ["", r.label];
+      if (!groups.has(group)) groups.set(group, []);
+      groups.get(group).push({ ...r, text });
+    }
+    box.replaceChildren(...[...groups].map(([group, reqs]) => {
+      const g = document.createElement("div");
+      g.className = "uds-group";
+      const l = document.createElement("div");
+      l.className = "lbl";
+      l.textContent = group;
+      g.append(l);
+      const reads = reqs.filter(r => /_d[0-9a-f]{3,4}$|_f[0-9a-f]{3}$/.test(r.name)).map(r => r.name);
+      if (reads.length > 1) {
+        const all = document.createElement("button");
+        all.className = "run";
+        all.dataset.all = "1";
+        all.onclick = () => toggleReadAll(reads);
+        g.append(all);
+      }
+      for (const r of reqs) {
+        const b = document.createElement("button");
+        b.textContent = r.text;
+        b.onclick = () => send("uds " + r.name);
+        g.append(b);
+      }
+      return g;
     }));
   }
-  for (const b of box.children) b.disabled = busy || !(ws && ws.readyState === WebSocket.OPEN);
+  for (const b of $$("button", box)) {
+    if (b.dataset.all) {
+      setText(b, readAll ? `Stop (${readAll.queue.length + 1} left)` : "Read all");
+      b.disabled = !online;
+    } else {
+      b.disabled = !online || udsBusy() || !!readAll;
+    }
+  }
+  const values = $("#uds-values");
+  values.replaceChildren(...[...udsValues.values()].sort((a, b) => a.name.localeCompare(b.name)).flatMap(v => {
+    const k = document.createElement("div");
+    k.textContent = v.name;
+    const d = document.createElement("div");
+    d.textContent = v.text + " ";
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = `${(v.t / 1000).toFixed(0)} s`;
+    d.append(t);
+    return [k, d];
+  }));
   const log = $("#uds-log");
   log.replaceChildren(...uds.log.slice().reverse().map(e => {
     const [text, cls] = udsLine(e);
@@ -850,7 +990,7 @@ function connect() {
     if (typeof ev.data === "string") {
       const msg = JSON.parse(ev.data);
       if (msg.type === "status") status = msg;
-      else if (msg.type === "uds") uds = msg;
+      else if (msg.type === "uds") onUds(msg);
     } else {
       parseFrames(ev.data);
     }
@@ -859,6 +999,7 @@ function connect() {
   ws.onclose = () => {
     ws = null;
     uds = null;  // The board may come back with another build; it resends the list when the page reconnects.
+    readAll = null;
     dirty = true;
     setTimeout(connect, 1000);
   };
