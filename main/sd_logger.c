@@ -44,7 +44,9 @@
 
 // Longest can.log line: "(18446744073709.551615) can0 1FFFFFFF#0011223344556677\n" is 56 bytes.
 #define CAN_LINE_MAX     64
-#define EVENT_LINE_MAX   160
+// Timestamp and event name; the value is copied straight into the chunk, so it can be long (a reassembled ISO-TP
+// reply as hex).
+#define EVENT_PREFIX_MAX 64
 
 // fsync commits data and the file size to the card, bounding what a power cut can lose. While a
 // backlog is being written it is postponed (it costs card time), but never longer than the max.
@@ -557,17 +559,21 @@ esp_err_t sd_logger_log_event(uint64_t timestamp_us, const char *event, const ch
         return ESP_FAIL;
     }
 
-    char line[EVENT_LINE_MAX];
-    int len = snprintf(line, sizeof(line), "%" PRIu64 ",%s,%s\n", timestamp_us, event, value);
-    if (len < 0 || len >= (int) sizeof(line)) {
+    char prefix[EVENT_PREFIX_MAX];
+    int prefix_len = snprintf(prefix, sizeof(prefix), "%" PRIu64 ",%s,", timestamp_us, event);
+    size_t value_len = strlen(value);
+    if (prefix_len < 0 || prefix_len >= (int) sizeof(prefix) || prefix_len + value_len + 1 > CHUNK_SIZE) {
         return ESP_ERR_INVALID_SIZE;
     }
 
+    size_t len = prefix_len + value_len + 1;
     char *dest = reserve(LOG_FILE_EVENTS, len);
     if (dest == NULL) {
         return ESP_ERR_NO_MEM;
     }
-    memcpy(dest, line, len);
+    memcpy(dest, prefix, prefix_len);
+    memcpy(dest + prefix_len, value, value_len);
+    dest[len - 1] = '\n';
     current[LOG_FILE_EVENTS]->len += len;
     return ESP_OK;
 }

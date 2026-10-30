@@ -9,10 +9,12 @@
 #include "sd_logger.h"
 
 // A fixed list of read-only diagnostic requests (UDS 0x3E/0x22, OBD-II mode 01), sent one at a time on request from
-// the page. Only in the CONFIG_CAN_TX_MODE build. Single-frame requests only; replies longer than one frame are
-// logged but not followed (no ISO-TP flow control).
+// the page. Only in the CONFIG_CAN_TX_MODE build. Requests are single frames; replies up to UDS_CLIENT_MSG_MAX bytes
+// are reassembled with ISO-TP (first frame, our flow control, consecutive frames).
 
 #define UDS_CLIENT_LOG_LEN 16
+// ISO-TP allows 4095. The longest DID we read is 408 bytes (BMS D465); longer replies are not followed.
+#define UDS_CLIENT_MSG_MAX 512
 
 typedef enum {
     UDS_LOG_TX,         // Request sent (data = the frame).
@@ -20,14 +22,32 @@ typedef enum {
     UDS_LOG_TX_FAILED,  // Every attempt failed (arbitration lost or bus error); len = attempts.
     UDS_LOG_DONE,       // Reply window closed; len = number of replies.
     UDS_LOG_REFUSED,    // Not sent: bus not error_active.
+    UDS_LOG_MESSAGE,    // Multi-frame reply complete; len = its length (uds_client_get_message has the bytes).
+    UDS_LOG_RX_ERROR,   // Multi-frame reply abandoned; len = uds_rx_error_t.
 } uds_log_kind_t;
+
+typedef enum {
+    UDS_RX_ERROR_SEQUENCE,    // A consecutive frame was missing or out of order.
+    UDS_RX_ERROR_TOO_LONG,    // Longer than UDS_CLIENT_MSG_MAX; no flow control sent.
+    UDS_RX_ERROR_INCOMPLETE,  // The reply window closed before the last consecutive frame.
+} uds_rx_error_t;
+
+// The latest reassembled multi-frame reply.
+typedef struct {
+    uint32_t seq;  // 0 until the first one; changes with every new message.
+    uint32_t t_ms;
+    uint8_t request;
+    uint16_t id;
+    uint16_t len;
+    uint8_t data[UDS_CLIENT_MSG_MAX];  // The UDS payload (service byte first), without ISO-TP headers.
+} uds_message_t;
 
 typedef struct {
     uint32_t t_ms;
     uint8_t kind;  // uds_log_kind_t
     uint8_t request;  // Index into the request table.
     uint16_t id;
-    uint8_t len;
+    uint16_t len;
     uint8_t data[8];
 } uds_log_entry_t;
 
@@ -57,3 +77,4 @@ size_t uds_client_request_count(void);
 const uds_request_t *uds_client_get_request(size_t index);
 // Copies the log oldest first; returns the entry count. seq changes whenever an entry is added.
 size_t uds_client_get_log(uds_log_entry_t *out, size_t max, uint32_t *seq);
+void uds_client_get_message(uds_message_t *out);

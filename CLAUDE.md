@@ -120,7 +120,7 @@ TWAI ISR (on_rx_done) ──► ring of rx_slot_t + counting semaphores ──�
 | [main/wifi_ap.c](main/wifi_ap.c) / [.h](main/wifi_ap.h) | NVS, netif, SoftAP (menuconfig → Live view Wi-Fi; password in `sdkconfig.secrets`), mDNS `can-sniffer.local`. |
 | [main/web_server.c](main/web_server.c) / [.h](main/web_server.h) | httpd on core 1: `GET /` serves [main/web/index.html](main/web/index.html) (gzipped at build time), `/ws` pushes the frame table (binary, 5 Hz) and status (JSON, 1 Hz) and takes `rec on`/`rec off`/`mark <label>`. |
 | [main/web/index.html](main/web/index.html) | The page: no frameworks. Its signal table (JSON, PSA-RE bit notation) is the decoding for the live view; check it with `tools/check_page_signals.py`. |
-| [main/uds_client.c](main/uds_client.c) / [.h](main/uds_client.h) | `CONFIG_CAN_TX_MODE` build only (not compiled otherwise): a fixed list of single-frame diagnostic requests sent one at a time from the page, reply collection, page log and `uds_*` events. See [docs/live-view.md](docs/live-view.md). |
+| [main/uds_client.c](main/uds_client.c) / [.h](main/uds_client.h) | `CONFIG_CAN_TX_MODE` build only (not compiled otherwise): a fixed list of single-frame diagnostic requests sent one at a time from the page, reply collection with ISO-TP reassembly (flow control only in answer to a first frame from the ECU just asked; replies up to 512 B), page log and `uds_*` events. See [docs/live-view.md](docs/live-view.md). |
 | [main/status_led.c](main/status_led.c) / [.h](main/status_led.h) | WS2812 status LED: `set`, timed `show_for` with a FreeRTOS one-shot timer, a "priority" flag that blocks other updates. |
 
 TWAI uses the **new v6 driver** (`esp_driver_twai`: `esp_twai.h`, `esp_twai_onchip.h`,
@@ -150,8 +150,9 @@ Each recording (REC switched on) creates `/sdcard/can-sniff/<boot id>-<nn>/`: th
   (`write_max_us=… sync_max_us=… buffers_min_free=n/total`, maxima and minimum over that second).
   Counters (`*_dropped_total`, `bus_errors`) start from zero in each session. `mark` lines (`<n> <label>`) come
   from the page's Mark button, stamped with the time of the press, so they can be up to a second out of order.
-  `can_mode` (`listen_only` or `tx`) opens each session; the TX mode build adds `uds_tx`/`uds_rx` (frame as
-  `ID#DATA`), `uds_done`, `uds_tx_failed` and `uds_refused`.
+  `can_mode` (`listen_only` or `tx`) opens each session; the TX mode build adds `uds_tx`/`uds_rx`/`uds_fc` (frame as
+  `ID#DATA`), `uds_msg` (complete multi-frame reply as hex), `uds_rx_error`, `uds_done`, `uds_tx_failed` and
+  `uds_refused`.
 
 Throughput budget: 500 kbit/s saturated is about 4,000 frames/s, or roughly 150 KB/s of text. The
 car's bus runs about 1,550 frames/s (~60 KB/s). Average bandwidth is not the problem; card latency is.

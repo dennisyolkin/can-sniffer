@@ -29,9 +29,9 @@
 #define FRAMES_MAGIC 'F'
 #define FRAMES_VERSION 1
 #define STATUS_JSON_MAX 512
-// Request list (about 60 characters per request, ~25 requests) plus UDS_CLIENT_LOG_LEN entries of about 110
-// characters each.
-#define UDS_JSON_MAX 4096
+// Request list (about 60 characters per request, ~30 requests), UDS_CLIENT_LOG_LEN entries of about 110 characters
+// each, and the latest multi-frame message as hex (2 characters per byte).
+#define UDS_JSON_MAX (4096 + 2 * UDS_CLIENT_MSG_MAX)
 // Commands from the page are short ("rec on", "mark <label>"); anything longer closes the connection.
 #define MAX_INCOMING_LEN 64
 #define MAX_CLIENTS CONFIG_LWIP_MAX_SOCKETS
@@ -66,6 +66,7 @@ static uint8_t frames_buf[FRAMES_HEADER_LEN + MAX_FRAMES * sizeof(live_frame_t)]
 static char status_buf[STATUS_JSON_MAX];
 #if CONFIG_CAN_TX_MODE
 static char uds_buf[UDS_JSON_MAX];
+static uds_message_t uds_message;
 static uint32_t uds_seq_sent = UINT32_MAX;
 #endif
 
@@ -151,9 +152,12 @@ static const char *const uds_kind_names[] = {
     [UDS_LOG_TX_FAILED] = "tx_failed",
     [UDS_LOG_DONE] = "done",
     [UDS_LOG_REFUSED] = "refused",
+    [UDS_LOG_MESSAGE] = "message",
+    [UDS_LOG_RX_ERROR] = "rx_error",
 };
 
-// {"type":"uds","requests":[{"name":..,"label":..}],"log":[{"t":ms,"kind":..,"req":..,"id":..,"len":n,"data":"hex"}]}
+// {"type":"uds","requests":[{"name":..,"label":..}],"log":[{"t":ms,"kind":..,"req":..,"id":..,"len":n,"data":"hex"}],
+//  "msg":{"seq":n,"t":ms,"req":..,"id":..,"len":n,"data":"hex"}}   (msg only after the first multi-frame reply)
 static size_t build_uds(uint32_t *seq) {
     uds_log_entry_t entries[UDS_CLIENT_LOG_LEN];
     size_t count = uds_client_get_log(entries, UDS_CLIENT_LOG_LEN, seq);
@@ -182,7 +186,27 @@ static size_t build_uds(uint32_t *seq) {
     }
     if (n > 0 && pos + n < sizeof(uds_buf)) {
         pos += n;
-        n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos, "]}");
+        n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos, "]");
+    }
+    uds_client_get_message(&uds_message);
+    if (uds_message.seq > 0 && n > 0 && pos + n < sizeof(uds_buf)) {
+        pos += n;
+        n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos,
+            ",\"msg\":{\"seq\":%" PRIu32 ",\"t\":%" PRIu32 ",\"req\":\"%s\",\"id\":%u,\"len\":%u,\"data\":\"",
+            uds_message.seq, uds_message.t_ms, uds_client_get_request(uds_message.request)->name,
+            (unsigned) uds_message.id, (unsigned) uds_message.len);
+        for (uint16_t i = 0; i < uds_message.len && n > 0 && pos + n < sizeof(uds_buf); i++) {
+            pos += n;
+            n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos, "%02X", uds_message.data[i]);
+        }
+        if (n > 0 && pos + n < sizeof(uds_buf)) {
+            pos += n;
+            n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos, "\"}");
+        }
+    }
+    if (n > 0 && pos + n < sizeof(uds_buf)) {
+        pos += n;
+        n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos, "}");
     }
     return n > 0 && pos + n < sizeof(uds_buf) ? pos + n : 0;
 }

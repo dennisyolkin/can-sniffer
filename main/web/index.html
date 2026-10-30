@@ -54,6 +54,9 @@
   .uds-group button.run { border-color: var(--accent); color: var(--accent); }
   #uds-values { display: grid; grid-template-columns: max-content 1fr; gap: .15rem .8rem; font-size: .9rem; margin: .3rem 0 .6rem; }
   #uds-values .t { color: var(--muted); font-size: .8rem; }
+  #uds-messages details { margin-bottom: .3rem; }
+  #uds-messages summary { cursor: pointer; font-size: .9rem; }
+  #uds-messages pre { font-size: .75rem; margin: .3rem 0; overflow-x: auto; }
   #uds-log { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; margin-top: .5rem; }
   #uds-log div { padding: .1rem 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #uds-log .pos { color: var(--good); }
@@ -295,6 +298,7 @@
     <h2>Diagnostics</h2>
     <div id="uds-buttons"></div>
     <div id="uds-values"></div>
+    <div id="uds-messages"></div>
     <div id="uds-log"></div>
   </div>
   <h2>Frames</h2>
@@ -801,18 +805,59 @@ function decodeDid(b) {
   return { did, name: spec.n, text: v.toFixed(spec.d || 0) + (spec.u ? " " + spec.u : "") };
 }
 
-// One line per log entry; replies are explained as ISO-TP single frame + UDS response.
+// Multi-frame DIDs (PSA-RE BMU_CTE1). v = the value after "62 DID"; returns { name, text } items for the values panel.
+const BCD = b => b.map(x => hex(x)).join("");
+const LONG_DIDS = {
+  0xD4B5: { n: "Cell SoH", decode: v => {
+    // 108 cells × 2 bytes. PSA-RE only says "bytes"; ÷16 % is a guess from D860 (pack SoH uses that scale).
+    const cells = [];
+    for (let i = 0; i + 1 < v.length; i += 2) cells.push(((v[i] << 8) | v[i + 1]) / 16);
+    if (!cells.length) return [];
+    const sorted = cells.map((x, i) => [x, i + 1]).sort((a, b) => a[0] - b[0]);
+    const avg = cells.reduce((a, b) => a + b, 0) / cells.length;
+    return [
+      { name: "Cell SoH min / avg / max", text: `${sorted[0][0].toFixed(1)} / ${avg.toFixed(1)} / ` +
+        `${sorted[sorted.length - 1][0].toFixed(1)} % (÷16 guessed, ${cells.length} cells)` },
+      { name: "Weakest cells", text: sorted.slice(0, 3).map(([x, n]) => `#${n} ${x.toFixed(1)}`).join(", ") },
+    ];
+  } },
+  0xF080: { n: "ECU identification", decode: v => [
+    { name: "BMS part number", text: BCD(v.slice(0, 5)) },
+    // Bytes 5-6 (PSA-RE 6.7-7.0); bms-isotp-1: 00 74.
+    { name: "BMS supplier", text: v[6] === 0x74 ? "CATL" : "0x" + hex(((v[5] || 0) << 8) | (v[6] || 0), 4) },
+    { name: "BMS additional reference", text: BCD(v.slice(7, 12)) },
+  ] },
+  0xF0FE: { n: "Software", decode: v => [
+    { name: "BMS software edition", text: String((v[11] << 8) | v[12]) },
+    { name: "BMS software download date", text: BCD(v.slice(13, 16)) },
+    { name: "BMS software downloads", text: String(v[20]) },
+    { name: "BMS software reference", text: BCD(v.slice(21, 24)) },
+  ] },
+  // ASCII, NUL-terminated (bms-isotp-1: "34VB0N0004787").
+  0xD901: { n: "Serial number", decode: v => [
+    { name: "BMS serial number", text: String.fromCharCode(...v.filter(x => x >= 0x20 && x < 0x7F)) },
+  ] },
+  0xD465: { n: "D465" },
+};
+
+// One line per log entry; replies are explained as ISO-TP frames + UDS response.
 function udsLine(e) {
   const b = frameBytes(e);
   const frame = hex(e.id, 3) + " " + b.map(x => hex(x)).join(" ");
   const t = (e.t / 1000).toFixed(2) + " s ";
-  if (e.kind === "tx") return [t + "→ " + frame, ""];
+  if (e.kind === "tx") return [t + "→ " + frame + (b[0] === 0x30 ? " · flow control: send the rest" : ""), ""];
+  if (e.kind === "message") return [t + `reply complete: ${e.len} bytes`, "pos"];
+  if (e.kind === "rx_error") {
+    return [t + "multi-frame reply " + (["broken: frame missing or out of order", "too long, not followed",
+      "incomplete: the ECU stopped"][e.len] || "failed"), "bad"];
+  }
   if (e.kind === "done") return [t + `done: ${e.len} repl${e.len === 1 ? "y" : "ies"}`, "meta"];
   if (e.kind === "tx_failed") return [t + `not sent after ${e.len} attempts`, "bad"];
   if (e.kind === "refused") return [t + "refused: bus not error_active", "bad"];
   let what = "", cls = "";
   if (b[0] >> 4 === 1) {
-    what = `multi-frame reply, ${((b[0] & 15) << 8) | b[1]} bytes (not followed)`;
+    what = `first frame of a ${((b[0] & 15) << 8) | b[1]}-byte reply`;
+    cls = "meta";
   } else if (b[1] === 0x7F) {
     what = `negative: ${NRC[b[3]] || "NRC " + hex(b[3])}`;
     cls = b[3] === 0x78 ? "meta" : "neg";
@@ -826,6 +871,8 @@ function udsLine(e) {
 
 const FINAL_KINDS = ["done", "tx_failed", "refused"];
 const udsValues = new Map();  // DID → { name, text, t }, newest reply per DID; survives the 16-entry board log
+const udsMessages = new Map();  // DID → { name, bytes, t }, newest multi-frame reply per DID
+let udsMessageSeq = 0;
 let readAll = null;           // { queue: [names], current, after (board ms), sentAt (Date.now()) }
 
 const udsBusy = () => {
@@ -845,6 +892,19 @@ function sendNextRead() {
 // Called for every "uds" message: keeps the newest decoded values and drives "Read all", one request at a time.
 function onUds(msg) {
   uds = msg;
+  const m = msg.msg;
+  if (m && m.seq !== udsMessageSeq) {
+    udsMessageSeq = m.seq;
+    const p = [];
+    for (let i = 0; i < m.data.length; i += 2) p.push(parseInt(m.data.slice(i, i + 2), 16));
+    if (p[0] === 0x62 && p.length >= 3) {
+      const did = (p[1] << 8) | p[2], spec = LONG_DIDS[did] || { n: "DID " + hex(did, 4) };
+      udsMessages.set(did, { name: spec.n, bytes: p.slice(3), t: m.t });
+      for (const [i, item] of (spec.decode ? spec.decode(p.slice(3)) : []).entries()) {
+        udsValues.set(did * 16 + i, { did, ...item, t: m.t });
+      }
+    }
+  }
   for (const e of msg.log) {
     if (e.kind !== "rx") continue;
     const v = decodeDid(frameBytes(e));
@@ -923,6 +983,24 @@ function renderUds() {
     d.append(t);
     return [k, d];
   }));
+  // Only rebuilt when a message arrives, so an expanded dump stays open.
+  const msgBox = $("#uds-messages");
+  if (msgBox.dataset.seq !== String(udsMessageSeq)) {
+    msgBox.dataset.seq = udsMessageSeq;
+    msgBox.replaceChildren(...[...udsMessages].map(([did, m]) => {
+      const d = document.createElement("details");
+      const sum = document.createElement("summary");
+      sum.textContent = `${hex(did, 4)} ${m.name} · ${m.bytes.length} bytes · ${(m.t / 1000).toFixed(0)} s`;
+      const pre = document.createElement("pre");
+      const rows = [];
+      for (let i = 0; i < m.bytes.length; i += 16) {
+        rows.push(hex(i, 3) + "  " + m.bytes.slice(i, i + 16).map(x => hex(x)).join(" "));
+      }
+      pre.textContent = rows.join("\n");
+      d.append(sum, pre);
+      return d;
+    }));
+  }
   const log = $("#uds-log");
   log.replaceChildren(...uds.log.slice().reverse().map(e => {
     const [text, cls] = udsLine(e);

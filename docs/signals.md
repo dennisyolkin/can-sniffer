@@ -18,6 +18,7 @@ Sources:
   Action log under "Ground truth (trip3)".
 - **diag-bms-1** (2026-10-29): parked, Ready, TX mode build; "Read all" sent the 22 BMS `0x22` requests while
   the broadcast frames were recorded, so every DID can be compared with its broadcast twin.
+- **bms-isotp-1** (2026-10-30): parked, TX mode; the five multi-frame BMS reads (ISO-TP), all complete.
 - **PSA-RE** ([github.com/prototux/PSA-RE](https://github.com/prototux/PSA-RE)): community database of PSA
   frames in YAML. The ë-C4 is car code `C41`, architecture `AEE2010.electric` (child of `.ev`, `.full`).
   Decode a capture with `tools/psare.py <session> <PSA-RE checkout>`; it resolves the variant chain.
@@ -82,6 +83,32 @@ value big-endian, PSA-RE `diag/AEE2010.ev/TBMU/BMU_CTE1`). Byte offsets below ar
 | D865 | Energy | 2 B ×1/64 kWh | doubtful | 12.66 kWh at 33.8 % → ~37.5 kWh full, below the ~42 kWh expected (46 kWh × SoH). Maybe excludes a bottom reserve |
 | D413 | "Cells minimum capacity" | 2 B ×1/512 % | doubtful | 32.8 %, next to SoC 33.8: more likely the weakest cell's SoC |
 | F18B | BMS manufacturing date | 3 B BCD | PSA-RE | `22 04 22`: 22 April 2022, fits the car's 2022 build |
+
+Multi-frame replies (ISO-TP), bms-isotp-1. The BMS sends consecutive frames about 10 ms apart whatever STmin we
+ask for (219 bytes in 0.3 s, 426 in 0.6 s).
+
+| DID | Value | Decode | Status | bms-isotp-1 |
+|-----|-------|--------|--------|-------------|
+| D4B5 | **SoH of each of the 108 cells** (`DATA_CELL_SOH`) | 108 × 2 B ×1/16 % (scale ours, from D860) | ours | 91.94-93.75 %, mean 93.00 %, σ 0.36. Weakest #18 (91.94), #37 (92.12). All above the pack's 90.94 %, so the pack SoH is not simply the weakest cell. The lowest-voltage cell (#90) is a strong one (93.44 %, 100th of 108): its low voltage is state of charge, not capacity |
+| F080 | ECU identification | b0-b4 part number (BCD), b5-b6 supplier (`0074` = CATL), b7-b11 additional reference (BCD) | PSA-RE | Part number `9827852280`, CATL, additional reference `9845775980`. b12-b21 `FF…0001FF…` |
+| F0FE | Supplier identification | b11-b12 software edition, b13-b15 download date (BCD), b20 number of downloads, b21-b23 software reference (BCD) | PSA-RE | Edition `7701`, download date `FFFFFF` (never reprogrammed after the factory?), downloads 2, reference `954926`. b4 = `74` (CATL), b6-b8 = `22 04 22` (= F18B) |
+| D901 | BMS serial number | ASCII, NUL-terminated | ours | `34VB0N0004787` |
+| D465 | Unnamed record, **423 bytes here** (PSA-RE: 408) | see below | ours | |
+
+D465 (offsets within the value). Two runs of 16-bit big-endian values on the D860 scale (×1/16 %) look like
+**SoH histories**: both start at 100.00 % (`0640`), and the first ends at exactly today's D860 value (`05AF` =
+90.94 %).
+
+| Offset | Values (÷16 %) |
+|--------|----------------|
+| 253-274 | 96.25, 100.00 ×5, 97.69, 95.88, 93.31, 93.44, **90.94** |
+| 309-332 | 100.00, 100.00, 97.69, 96.94, 96.25, 95.88, 95.12, 94.50, 94.94, 93.88, 93.12, 91.50 |
+
+The second run falls steadily, about 0.7 point per step; how often a value is stored (time, km, Ah) is unknown.
+The first one's leading 96.25 does not fit a simple oldest-to-newest order (a ring buffer's write position?).
+The rest of D465 is mostly 16- and 32-bit counters (many end in `00`, so possibly little-endian), candidates for
+histograms (time per temperature or SoC band) or event counters. To decode: read it again after a drive or a
+charge and see which fields move.
 
 ## Driving
 

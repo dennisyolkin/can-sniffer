@@ -110,6 +110,7 @@ Requests (`uds_client.c`, allowlisted in C to UDS `0x3E`, `0x22` and OBD-II mode
 | BMS: TesterPresent | `6B4#023E000000000000` | `694#027E00` |
 | ABS: TesterPresent | `6AD#023E000000000000` | `68D#027E00` |
 | BMS: 22 reads (below) | `6B4#0322xxxx00000000` | `694#0n62xxxx` + value, or `694#037F22nn` |
+| BMS: 5 long reads (below) | `6B4#0322xxxx00000000` | ISO-TP multi-frame reply |
 
 BMS reads (`0x22`, one DID per request; PSA-RE `TBMU/BMU_CTE1`, value ≤ 4 bytes so the reply is one frame). The
 page decodes them (`DIDS` in `index.html`: big-endian value at byte offset `o`, `raw × f + off`), keeps the newest
@@ -136,6 +137,26 @@ twin match it (details and status per DID in docs/signals.md, "Traction battery 
 | D822 | 12 V battery voltage as the BMS sees it | 2 B × 0.001 V |
 | F18B | ECU manufacturing date | 3 B BCD |
 
+Long BMS reads (multi-frame replies, reassembled with ISO-TP; all five answered in bms-isotp-1, values in
+docs/signals.md):
+
+| DID | Value | Page shows |
+|-----|-------|------------|
+| D4B5 | `DATA_CELL_SOH`: 108 cells × 2 B | min / avg / max and the 3 weakest cells, ÷16 % like D860 (fits: 91.9-93.8 %) |
+| F080 | ECU identification: part number (BCD), supplier (`0074` = CATL), additional reference | decoded |
+| F0FE | Supplier identification: software edition, download date, number of downloads, software reference | decoded |
+| D901 | BMS serial number, ASCII | decoded |
+| D465 | 423 B here (PSA-RE: 408), unnamed; contains what looks like SoH histories | hex |
+
+ISO-TP: a reply longer than 7 bytes starts with a first frame (`1L LL` + 6 bytes, `LLL` = total length). The node
+answers on the request ID with a flow control `30 00 01`: continue, block size 0 (send everything), at least 1 ms
+between frames. The ECU then sends consecutive frames (`2N` + 7 bytes, `N` counting 1..15, 0, …). The node only
+sends a flow control in answer to a first frame from the ECU it just asked. Replies up to 512 bytes are followed
+(`UDS_CLIENT_MSG_MAX`); a longer one gets no flow control, and the ECU gives up by itself. A missing or
+out-of-order frame, or a gap of more than 1 s, abandons the reply. The page log shows the first frame, our flow
+control and "reply complete: N bytes" (not each consecutive frame; they are all in `can.log`); the values panel
+decodes the known DIDs, and each long reply has an expandable hex dump.
+
 Tried from the OBD port and removed because nothing ever answered (addresses from PSA-RE; kept here in case another
 port, session or address makes them work):
 
@@ -156,13 +177,16 @@ itself, and the ECUs there take diagnostic requests directly, with no gateway in
 
 One request at a time. The node must be `error_active`, or the request is refused. A request is single-shot on the
 ESP32, so it is retried up to 5 times, 5 ms apart, if it loses arbitration or hits a bus error (back-to-back
-retries all landed in the same burst of car frames). Replies are collected for 1 s
-(a physical request stops at its first final reply; "response pending" keeps waiting). Multi-frame replies are
-shown but not followed (no ISO-TP flow control yet). The node receives its own requests back (loopback), so they
-appear in `can.log`; `events.csv` gets `uds_tx`, `uds_rx`, `uds_done`, `uds_tx_failed` and `uds_refused`.
+retries all landed in the same burst of car frames). Replies are collected for 1 s (a physical request stops at its
+first final reply; "response pending" keeps waiting; each consecutive frame of a multi-frame reply restarts the
+second). The node receives its own requests back (loopback), so they appear in `can.log`; `events.csv` gets `uds_tx`, `uds_rx`, `uds_fc` (our flow control), `uds_msg` (`<request>
+<hex>`, a complete multi-frame reply), `uds_rx_error` (`<request> <sequence|too_long|incomplete> <received>/<len>`),
+`uds_done`, `uds_tx_failed` and `uds_refused`.
 
 The WebSocket gets a `{"type":"uds","requests":[…],"log":[…]}` message whenever the log changes, and once when a
 page connects; the page sends `uds <name>`. `requests` is `{name, label}` per button. `log` holds the last 16
 entries, oldest first: `{t, kind, req, id, len, data}` with `t` in board ms, `id` as a decimal number, `data` as 8
-bytes of hex, and `kind` one of `tx`, `rx`, `done`, `tx_failed`, `refused` (for `done` and `tx_failed`, `len` is the
-number of replies or attempts).
+bytes of hex, and `kind` one of `tx`, `rx`, `done`, `tx_failed`, `refused`, `message`, `rx_error` (for `done` and
+`tx_failed`, `len` is the number of replies or attempts; for `message` the reply length; for `rx_error` 0 =
+sequence, 1 = too long, 2 = incomplete). After the first multi-frame reply the message also carries
+`"msg":{"seq","t","req","id","len","data"}`: the latest complete reply, UDS payload as hex.
