@@ -248,4 +248,6 @@ Captures are analyzed on the laptop. If helper scripts are added, put them under
 - `psare.py` decodes a capture with [PSA-RE](https://github.com/prototux/PSA-RE) frame definitions (needs a local
   checkout, kept at `~/projects/repos/PSA-RE`; the ë-C4 is `AEE2010.electric`, bus `HS.HS1`). PSA-RE covers 79 of the 87 IDs on this bus,
   but not every definition fits this car; check values before trusting one.
+- `cell_soh.py` takes the per-cell SoH (BMS DID D4B5) from a TX mode session, writes it as CSV and compares it with
+  an earlier one (`--compare`). Dated readings are kept in [docs/cell-soh/](docs/cell-soh/) (first: 2026-10-30).
 - Decoded signals, confidence levels and open questions: [docs/signals.md](docs/signals.md).
