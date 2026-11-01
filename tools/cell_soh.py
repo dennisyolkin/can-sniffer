@@ -28,8 +28,8 @@ def read_events(session: Path) -> tuple[list[int], float | None]:
                 if data[:3] == b"\x62\xd4\xb5" and len(data) == 3 + 2 * CELLS:
                     cells = [int.from_bytes(data[3 + 2 * i:5 + 2 * i], "big") for i in range(CELLS)]
             elif row[1] == "uds_rx" and row[2].startswith("694#0662D860"):
-                # Single frame: 06 62 D8 60, then 3 value bytes; SoH is the last two.
-                pack = int(row[2][16:20], 16) / 16
+                # "694#" + single frame 06 62 D8 60 + 3 value bytes; SoH is the last two (hex chars 14-17).
+                pack = int(row[2][14:18], 16) / 16
     if cells is None:
         raise SystemExit(f"{session}: no complete D4B5 reply in events.csv")
     return cells, pack

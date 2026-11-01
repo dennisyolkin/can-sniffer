@@ -19,6 +19,8 @@ Sources:
 - **diag-bms-1** (2026-10-29): parked, Ready, TX mode build; "Read all" sent the 22 BMS `0x22` requests while
   the broadcast frames were recorded, so every DID can be compared with its broadcast twin.
 - **bms-isotp-1** (2026-10-30): parked, TX mode; the five multi-frame BMS reads (ISO-TP), all complete.
+- **bms-abc-1** (2026-10-31/11-01): parked right after an AC charge to 100 %, 25,832 km; every BMS read, fault codes.
+- **bms-abc-2 / -3**: the same reads after an 88 km drive, 70.2 %, 25,920 km (two sessions a minute apart).
 - **PSA-RE** ([github.com/prototux/PSA-RE](https://github.com/prototux/PSA-RE)): community database of PSA
   frames in YAML. The ë-C4 is car code `C41`, architecture `AEE2010.electric` (child of `.ev`, `.full`).
   Decode a capture with `tools/psare.py <session> <PSA-RE checkout>`; it resolves the variant chain.
@@ -80,9 +82,52 @@ value big-endian, PSA-RE `diag/AEE2010.ev/TBMU/BMU_CTE1`). Byte offsets below ar
 | D871 / D873 | Max charge / discharge power for 10 s | 4 B ×1/128 −500 kW | PSA-RE | −132.7 / +125.4 kW at 34 %, 12 °C (charge is negative) |
 | D811 | Battery status | enum (0 = normal) | PSA-RE | normal |
 | D86D | Cell balancing status | enum (0 = correct) | PSA-RE | correct |
-| D865 | Energy | 2 B ×1/64 kWh | doubtful | 12.66 kWh at 33.8 % → ~37.5 kWh full, below the ~42 kWh expected (46 kWh × SoH). Maybe excludes a bottom reserve |
-| D413 | "Cells minimum capacity" | 2 B ×1/512 % | doubtful | 32.8 %, next to SoC 33.8: more likely the weakest cell's SoC |
+| D865 | Energy left above a reserve | 2 B ×1/64 kWh | ours | 12.66 kWh at 33.8 %, 40.16 at 100 %, 26.88 at 70.2 %. 0.45 kWh per % between 70 and 100 %, reaching 0 near ~10 %: usable energy down to a reserve, not total. The 88 km drive took 13.28 kWh (~150 Wh/km at 13 °C) |
+| D413 | PSA-RE: "cells minimum capacity" | 2 B ×1/512 % | doubtful | 32.8 / 94.99 / 66.5-66.8 % at SoC 33.8 / 100 / 70.2: a SoC on another scale (~0.95 × SoC, between D862 and D863) |
 | F18B | BMS manufacturing date | 3 B BCD | PSA-RE | `22 04 22`: 22 April 2022, fits the car's 2022 build |
+
+More reads (bms-abc-1 = 100 % after charging, bms-abc-3 = 70.2 % after 88 km):
+
+| DID | Value | Decode | Status | bms-abc-1 / bms-abc-3 |
+|-----|-------|--------|--------|-----------------------|
+| D862 / D863 | PSA-RE: min / max "charge status" (config). **Moves with SoC, so live: lowest / highest cell SoC** | 2 B ×1/512 % | ours | 93.01 / 95.22 % and 64.78 / 67.07 %: cells span ~2.2 % of SoC at both levels |
+| D410 | SoC sensor calibration | 2 B ×1/512 % | ours | 99.99 / 70.19 %: equals D810 |
+| D86D | Cell balancing status | enum | ours | "correct" at 34 % and 100 % (cell spread 11-12 mV), **"incorrect" at 70 %** (20 mV). Probably flags an imbalance above a threshold |
+| D871 / D872 | Max charge power 10 s / 30 s | 4 B ×1/128 −500 kW | PSA-RE | **−16.1 / −16.2 kW at 100 %**, −94 / −76 kW at 70 %: little regen right after a full charge |
+| D873 / D874 | Max discharge power 10 s / 30 s | 4 B ×1/128 −500 kW | PSA-RE | 147.8 / 122.3 kW and 136.6 / 111.7 kW |
+| D876 | Max current 10 s | 4 B ×1/64 −1200 A | PSA-RE | 378.8 / 375.0 A |
+| D812 / D813 / D814 | Why the switches last opened / switch state / switch welded | enum | PSA-RE | no error / closed / not welded (both) |
+| D86B | Fuse F1 | enum | PSA-RE | good |
+| D47A, D87B / D87C | Insulation total, + side / − side | 4 B kΩ | PSA-RE | 52,782 then 60,000; ± 60,000 kΩ. 60,000 looks like the top of the range |
+| D49C | Mileage as the BMS sees it | 4 B ×1/1024 km | verified | 25,832 / 25,920 km = odometer (`552`) |
+| D4CA | Vehicle time counter (from the BSI) | 4 B ×0.1 s | verified | 1,807,098.8 / 1,835,541.8 s; `552` b0-3 read a moment later: 1,807,227.8 / 1,835,592.8 |
+| D445 / D446 | Hottest / coldest module number | 1 B | PSA-RE | 22 / 3 and 0 / 37; temperatures only 2-3 °C apart, so not meaningful here |
+| D89E | Last CAN information fault: type, source | b0 enum, b1-b2 | PSA-RE | `05 06 00`: type 5 = "time elapsed" (a message timeout) from source `0600`. No fault code stored |
+| F18C | ECU serial number | ASCII (15 B reply, PSA-RE says 1 B) | ours | `522165901215` |
+| D416-D419, D41E-D423 | Unnamed, in identical pairs | 4 B uint | ours | 3154/3151/3028/393/379 → +1 or +2 after the drive: **counters** (wake-ups? charges? `D420`/`D422` ≈ 390 fits a charge count over 4.5 years) |
+| E082, D900 | Unnamed | | | 0 |
+
+**Fault codes:** `19 01 09` → 0, `19 02 09` and `19 02 2D` → empty lists, at 100 % and after the drive: no active,
+confirmed or historical fault in the BMS.
+
+**Cell 90**, the cell with the lowest voltage in every capture (`334`, medians): −10 mV below the median at 34 %
+(twice) and **still −10 mV right after charging to 100 %**, −17 mV at 70 % after driving. With D862/D863 spanning
+the same ~2.2 % of SoC at 100 % and 70 %, the gap is a constant SoC offset (~2 %); the mV gap changes with the slope
+of the cell voltage curve at that SoC. Its SoH (D4B5) is among the best (93.4 %, then 93.2 %), so it is a state of
+charge offset, not lost capacity. The charge to 100 % did not balance it.
+
+**Per-cell SoH (D4B5) recalculated:** identical in bms-isotp-1 and bms-abc-1, then **every cell exactly −4 raw
+(−0.25 point)** after the drive (mean 93.00 → 92.75). A uniform step, so a recalibration of the whole set, probably
+using the full charge as a reference, not wear in 88 km. Pack SoH D860 unchanged (90.94). Readings in
+`docs/cell-soh/`.
+
+**D465 counters:** about 15 fields change between readings; the SoH history runs (253-274, 309-332) do not. Two
+clear ones, 24-bit big-endian (+ a `00` byte):
+- 148-150: **BMS active time in seconds?** +8,605 over the charge (~2.4 h), +3,551 over the drive (~1 h), +108
+  between bms-abc-2 and -3 (123 s apart). 933,723 s ≈ 259 h total.
+- 408-410 / 412-414: **discharge / charge throughput** (unit maybe 0.01 Ah): charge +61 / +9,065, drive +4,521 /
+  +748 (regen). Totals 1,460,360 / 1,496,567.
+Others move mostly with charging (124-131, 384-387, 12-15) or with driving (168-171, 388-395).
 
 Multi-frame replies (ISO-TP), bms-isotp-1. The BMS sends consecutive frames about 10 ms apart whatever STmin we
 ask for (219 bytes in 0.3 s, 426 in 0.6 s).

@@ -8,8 +8,8 @@
 
 #include "sd_logger.h"
 
-// A fixed list of read-only diagnostic requests (UDS 0x3E/0x22, OBD-II mode 01), sent one at a time on request from
-// the page. Only in the CONFIG_CAN_TX_MODE build. Requests are single frames; replies up to UDS_CLIENT_MSG_MAX bytes
+// A fixed list of diagnostic requests (UDS 0x3E/0x22/0x19, 0x10 default/extended session, OBD-II mode 01), sent one
+// at a time on request from the page. Nothing that writes, resets or unlocks the ECU. Only in the CONFIG_CAN_TX_MODE build. Requests are single frames; replies up to UDS_CLIENT_MSG_MAX bytes
 // are reassembled with ISO-TP (first frame, our flow control, consecutive frames).
 
 #define UDS_CLIENT_LOG_LEN 16
@@ -51,13 +51,18 @@ typedef struct {
     uint8_t data[8];
 } uds_log_entry_t;
 
+#define UDS_CLIENT_PARAM_MAX 3
+
 typedef struct {
-    const char *name;   // Command name from the page: "uds <name>".
+    const char *name;   // Command name from the page: "uds <name>" or "uds <name> <hex param>".
     const char *label;  // Shown on the button.
     uint16_t tx_id;
     uint16_t rx_id_min;
     uint16_t rx_id_max;
     uint8_t data[8];    // ISO-TP single frame: length byte, service, parameters, padding.
+    uint8_t param_offset;  // Where the page's parameter goes in data (a DTC for 0x19 04/06)...
+    uint8_t param_len;     // ...and how many bytes it must have; 0 = no parameter.
+    bool danger;           // Changes the ECU's state (0x10); the page shows it in red.
 } uds_request_t;
 
 esp_err_t uds_client_init(twai_node_handle_t node);
@@ -71,8 +76,9 @@ void uds_client_poll(int64_t now_us, bool bus_ok);
 void uds_client_on_tx_done_from_isr(bool success);
 
 // Web server side.
-// ESP_ERR_NOT_FOUND for an unknown name, ESP_ERR_INVALID_STATE while a request is in flight.
-esp_err_t uds_client_request(const char *name);
+// param: param_len bytes for a request that takes one, else NULL/0. ESP_ERR_NOT_FOUND for an unknown name,
+// ESP_ERR_INVALID_ARG for a parameter of the wrong length, ESP_ERR_INVALID_STATE while a request is in flight.
+esp_err_t uds_client_request(const char *name, const uint8_t *param, size_t param_len);
 size_t uds_client_request_count(void);
 const uds_request_t *uds_client_get_request(size_t index);
 // Copies the log oldest first; returns the entry count. seq changes whenever an entry is added.

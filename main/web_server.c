@@ -29,9 +29,9 @@
 #define FRAMES_MAGIC 'F'
 #define FRAMES_VERSION 1
 #define STATUS_JSON_MAX 512
-// Request list (about 60 characters per request, ~30 requests), UDS_CLIENT_LOG_LEN entries of about 110 characters
+// Request list (about 90 characters per request, ~65 requests), UDS_CLIENT_LOG_LEN entries of about 110 characters
 // each, and the latest multi-frame message as hex (2 characters per byte).
-#define UDS_JSON_MAX (4096 + 2 * UDS_CLIENT_MSG_MAX)
+#define UDS_JSON_MAX (8192 + 2 * UDS_CLIENT_MSG_MAX)
 // Commands from the page are short ("rec on", "mark <label>"); anything longer closes the connection.
 #define MAX_INCOMING_LEN 64
 #define MAX_CLIENTS CONFIG_LWIP_MAX_SOCKETS
@@ -156,7 +156,7 @@ static const char *const uds_kind_names[] = {
     [UDS_LOG_RX_ERROR] = "rx_error",
 };
 
-// {"type":"uds","requests":[{"name":..,"label":..}],"log":[{"t":ms,"kind":..,"req":..,"id":..,"len":n,"data":"hex"}],
+// {"type":"uds","requests":[{"name":..,"label":..,"param":n,"danger":bool}],"log":[{"t":ms,"kind":..,"req":..,"id":..,"len":n,"data":"hex"}],
 //  "msg":{"seq":n,"t":ms,"req":..,"id":..,"len":n,"data":"hex"}}   (msg only after the first multi-frame reply)
 static size_t build_uds(uint32_t *seq) {
     uds_log_entry_t entries[UDS_CLIENT_LOG_LEN];
@@ -167,8 +167,9 @@ static size_t build_uds(uint32_t *seq) {
     for (size_t i = 0; i < uds_client_request_count() && n > 0 && pos + n < sizeof(uds_buf); i++) {
         pos += n;
         const uds_request_t *r = uds_client_get_request(i);
-        n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos, "%s{\"name\":\"%s\",\"label\":\"%s\"}",
-            i > 0 ? "," : "", r->name, r->label);
+        n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos,
+            "%s{\"name\":\"%s\",\"label\":\"%s\",\"param\":%u,\"danger\":%s}",
+            i > 0 ? "," : "", r->name, r->label, (unsigned) r->param_len, r->danger ? "true" : "false");
     }
     if (n > 0 && pos + n < sizeof(uds_buf)) {
         pos += n;
@@ -293,6 +294,44 @@ static void on_push_timer(void *arg) {
     }
 }
 
+#if CONFIG_CAN_TX_MODE
+// "<name>" or "<name> <hex>": the hex is the request's parameter (a DTC), checked again by uds_client.
+static void handle_uds_command(const char *args) {
+    char name[32];
+    uint8_t param[UDS_CLIENT_PARAM_MAX];
+    size_t param_len = 0;
+    const char *space = strchr(args, ' ');
+    size_t name_len = space != NULL ? (size_t) (space - args) : strlen(args);
+    if (name_len >= sizeof(name)) {
+        ESP_LOGW(TAG, "uds request name too long");
+        return;
+    }
+    memcpy(name, args, name_len);
+    name[name_len] = '\0';
+    if (space != NULL) {
+        const char *hex = space + 1;
+        size_t digits = strlen(hex);
+        if (digits % 2 != 0 || digits / 2 > sizeof(param)) {
+            ESP_LOGW(TAG, "uds parameter \"%s\" is not 1-%u hex bytes", hex, (unsigned) sizeof(param));
+            return;
+        }
+        for (size_t i = 0; i < digits / 2; i++) {
+            unsigned byte;
+            if (sscanf(hex + 2 * i, "%2x", &byte) != 1) {
+                ESP_LOGW(TAG, "uds parameter \"%s\" is not hex", hex);
+                return;
+            }
+            param[i] = (uint8_t) byte;
+        }
+        param_len = digits / 2;
+    }
+    esp_err_t err = uds_client_request(name, param_len > 0 ? param : NULL, param_len);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "uds request \"%s\" not queued: %s", args, esp_err_to_name(err));
+    }
+}
+#endif
+
 static void handle_command(const char *text) {
     if (strcmp(text, "rec on") == 0) {
         live_data_request_recording(true);
@@ -300,10 +339,7 @@ static void handle_command(const char *text) {
         live_data_request_recording(false);
 #if CONFIG_CAN_TX_MODE
     } else if (strncmp(text, "uds ", 4) == 0) {
-        esp_err_t err = uds_client_request(text + 4);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "uds request \"%s\" not queued: %s", text + 4, esp_err_to_name(err));
-        }
+        handle_uds_command(text + 4);
 #endif
     } else if (strncmp(text, "mark ", 5) == 0) {
         if (live_data_add_mark(text + 5) != ESP_OK) {

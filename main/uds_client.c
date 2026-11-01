@@ -39,13 +39,28 @@ static const char *TAG = "uds_client";
 // (docs/live-view.md, "Transmitting").
 // BMS reads: DIDs from PSA-RE TBMU/BMU_CTE1. Values up to 4 bytes fit in a single-frame reply; longer ones come back
 // as ISO-TP multi-frame replies. The page decodes them; the label's "ECU:" prefix groups the buttons.
-#define BMS_READ(name, label, did) \
-    {name, "BMS: " label, 0x6B4, 0x694, 0x694, {0x03, 0x22, (uint8_t) ((did) >> 8), (uint8_t) ((did) & 0xFF)}}
+#define REQUEST(req_name, req_label, tx, rx, ...) \
+    {.name = req_name, .label = req_label, .tx_id = tx, .rx_id_min = rx, .rx_id_max = rx, .data = {__VA_ARGS__}}
+#define BMS(name, label, ...) REQUEST(name, label, 0x6B4, 0x694, __VA_ARGS__)
+#define BMS_DID(name, label, did) BMS(name, label, 0x03, 0x22, (uint8_t) ((did) >> 8), (uint8_t) ((did) & 0xFF))
+#define BMS_READ(name, label, did) BMS_DID(name, "BMS: " label, did)
+#define BMS_EXTRA(name, label, did) BMS_DID(name, "BMS extra: " label, did)
+// ReadDTCInformation. Status masks: 0x09 = test failed now or confirmed (what PSA tools list), 0x2D = also pending
+// and "failed since the last clear", i.e. the history.
+#define BMS_DTC(name, label, ...) BMS(name, "BMS faults: " label, __VA_ARGS__)
+// Per fault code: the page fills in the 3-byte DTC at data[3]; record FF = all records.
+#define BMS_DTC_RECORD(req_name, req_label, subfunction) \
+    {.name = req_name, .label = "BMS faults: " req_label, .tx_id = 0x6B4, .rx_id_min = 0x694, .rx_id_max = 0x694, \
+     .data = {0x06, 0x19, subfunction, 0, 0, 0, 0xFF}, .param_offset = 3, .param_len = 3}
+// DiagnosticSessionControl: shown in red on the page.
+#define BMS_SESSION(req_name, req_label, session) \
+    {.name = req_name, .label = "BMS session: " req_label, .tx_id = 0x6B4, .rx_id_min = 0x694, .rx_id_max = 0x694, \
+     .data = {0x02, 0x10, session}, .danger = true}
 
 static const uds_request_t requests[] = {
-    {"vcu_tp", "VCU: TesterPresent", 0x6A2, 0x682, 0x682, {0x02, 0x3E, 0x00}},
-    {"abs_tp", "ABS: TesterPresent", 0x6AD, 0x68D, 0x68D, {0x02, 0x3E, 0x00}},
-    {"bms_tp", "BMS: TesterPresent", 0x6B4, 0x694, 0x694, {0x02, 0x3E, 0x00}},
+    REQUEST("vcu_tp", "VCU: TesterPresent", 0x6A2, 0x682, 0x02, 0x3E, 0x00),
+    REQUEST("abs_tp", "ABS: TesterPresent", 0x6AD, 0x68D, 0x02, 0x3E, 0x00),
+    BMS("bms_tp", "BMS: TesterPresent", 0x02, 0x3E, 0x00),
     BMS_READ("bms_d810", "SoC", 0xD810),
     BMS_READ("bms_d860", "SoH", 0xD860),
     BMS_READ("bms_d413", "Min cell capacity", 0xD413),
@@ -74,6 +89,48 @@ static const uds_request_t requests[] = {
     BMS_READ("bms_f0fe", "Software", 0xF0FE),
     BMS_READ("bms_d901", "Serial number", 0xD901),
     BMS_READ("bms_d465", "D465 (408 B)", 0xD465),
+
+    BMS_EXTRA("bms_d862", "Min charge level", 0xD862),
+    BMS_EXTRA("bms_d863", "Max charge level", 0xD863),
+    BMS_EXTRA("bms_d410", "SoC sensor calibration", 0xD410),
+    BMS_EXTRA("bms_d812", "Why switches opened", 0xD812),
+    BMS_EXTRA("bms_d813", "Switch state", 0xD813),
+    BMS_EXTRA("bms_d814", "Switch welded?", 0xD814),
+    BMS_EXTRA("bms_d86b", "Fuse F1", 0xD86B),
+    BMS_EXTRA("bms_d87b", "Insulation +", 0xD87B),
+    BMS_EXTRA("bms_d87c", "Insulation -", 0xD87C),
+    BMS_EXTRA("bms_d872", "Charge limit 30 s", 0xD872),
+    BMS_EXTRA("bms_d874", "Discharge limit 30 s", 0xD874),
+    BMS_EXTRA("bms_d876", "Current limit 10 s", 0xD876),
+    BMS_EXTRA("bms_d445", "Hottest module", 0xD445),
+    BMS_EXTRA("bms_d446", "Coldest module", 0xD446),
+    BMS_EXTRA("bms_d49c", "Mileage (BMS)", 0xD49C),
+    BMS_EXTRA("bms_d4ca", "Time counter (BMS)", 0xD4CA),
+    BMS_EXTRA("bms_d89e", "CAN fault record", 0xD89E),
+    BMS_EXTRA("bms_f18c", "F18C", 0xF18C),
+    BMS_EXTRA("bms_d900", "D900", 0xD900),
+    BMS_EXTRA("bms_e082", "E082", 0xE082),
+    BMS_EXTRA("bms_d416", "D416", 0xD416),
+    BMS_EXTRA("bms_d417", "D417", 0xD417),
+    BMS_EXTRA("bms_d418", "D418", 0xD418),
+    BMS_EXTRA("bms_d419", "D419", 0xD419),
+    BMS_EXTRA("bms_d41e", "D41E", 0xD41E),
+    BMS_EXTRA("bms_d41f", "D41F", 0xD41F),
+    BMS_EXTRA("bms_d420", "D420", 0xD420),
+    BMS_EXTRA("bms_d421", "D421", 0xD421),
+    BMS_EXTRA("bms_d422", "D422", 0xD422),
+    BMS_EXTRA("bms_d423", "D423", 0xD423),
+
+    BMS_DTC("bms_dtc_count", "Count", 0x03, 0x19, 0x01, 0x09),
+    BMS_DTC("bms_dtc_active", "Active / confirmed", 0x03, 0x19, 0x02, 0x09),
+    BMS_DTC("bms_dtc_history", "History", 0x03, 0x19, 0x02, 0x2D),
+    BMS_DTC_RECORD("bms_dtc_snapshot", "Snapshot", 0x04),
+    BMS_DTC_RECORD("bms_dtc_extended", "Extended data", 0x06),
+
+    // The ECU falls back to the default session ~5 s after the last request (S3 timer) unless TesterPresent keeps
+    // the extended one open. Never the programming session (0x02).
+    BMS_SESSION("bms_session_default", "Default (10 01)", 0x01),
+    BMS_SESSION("bms_session_extended", "Extended (10 03)", 0x03),
 };
 #define REQUEST_COUNT (sizeof(requests) / sizeof(requests[0]))
 
@@ -98,8 +155,10 @@ typedef enum {
 
 static twai_node_handle_t node;
 
-// Web server -> logger loop.
-static atomic_int pending = -1;
+// Web server -> logger loop, under request_lock: the index and its parameter travel together.
+static portMUX_TYPE request_lock = portMUX_INITIALIZER_UNLOCKED;
+static int pending = -1;
+static uint8_t pending_param[UDS_CLIENT_PARAM_MAX];
 static atomic_bool busy;
 // ISR -> logger loop.
 static atomic_int tx_result;
@@ -114,6 +173,8 @@ static int64_t window_end_us;
 static int64_t retry_at_us;
 static tx_kind_t tx_kind;
 static uint16_t tx_id;
+// The current request's frame, with the page's parameter filled in.
+static uint8_t request_data[8];
 // The driver keeps a pointer to the frame until it is sent.
 static twai_frame_t tx_frame;
 static uint8_t tx_data[8];
@@ -137,19 +198,27 @@ static unsigned log_count;
 static uint32_t log_seq;
 static uds_message_t message;
 
-// Read-only services only, single frames only. Checked in C so a change to the table cannot slip past it.
-static bool allowed(const uds_request_t *r) {
-    uint8_t len = r->data[0];
+// Nothing that writes, resets, unlocks or programs the ECU; single frames only. Checked in C on the exact frame
+// that goes out (after the page's parameter is filled in), so neither the table nor the page can slip past it.
+static bool allowed(uint16_t id, const uint8_t *data) {
+    uint8_t len = data[0];
     if (len < 2 || len > 7) {
         return false;
     }
-    switch (r->data[1]) {
+    switch (data[1]) {
     case 0x3E:  // TesterPresent, with or without "suppress positive response".
-        return len == 2 && (r->data[2] == 0x00 || r->data[2] == 0x80);
+        return len == 2 && (data[2] == 0x00 || data[2] == 0x80);
     case 0x22:  // ReadDataByIdentifier: one or more 2-byte DIDs.
         return len >= 3 && (len - 1) % 2 == 0;
+    case 0x19:  // ReadDTCInformation: count / list by status mask, snapshot / extended data of one DTC.
+        if (data[2] == 0x01 || data[2] == 0x02) {
+            return len == 3;
+        }
+        return (data[2] == 0x04 || data[2] == 0x06) && len == 6;
+    case 0x10:  // DiagnosticSessionControl: default or extended session; never programming (0x02).
+        return len == 2 && (data[2] == 0x01 || data[2] == 0x03);
     case 0x01:  // OBD-II current data, functional or physical request.
-        return len >= 2 && (r->tx_id == 0x7DF || (r->tx_id >= 0x7E0 && r->tx_id <= 0x7E7));
+        return id == 0x7DF || (id >= 0x7E0 && id <= 0x7E7);
     default:
         return false;
     }
@@ -227,7 +296,7 @@ static void transmit(int64_t now_us) {
 static void start_request(int64_t now_us) {
     tx_kind = TX_KIND_REQUEST;
     tx_id = current->tx_id;
-    memcpy(tx_data, current->data, sizeof(tx_data));
+    memcpy(tx_data, request_data, sizeof(tx_data));
     attempts = 0;
     transmit(now_us);
 }
@@ -330,7 +399,9 @@ static void on_consecutive_frame(const can_log_frame_t *frame) {
 
 esp_err_t uds_client_init(twai_node_handle_t twai_node) {
     for (size_t i = 0; i < REQUEST_COUNT; i++) {
-        if (!allowed(&requests[i])) {
+        const uds_request_t *r = &requests[i];
+        if (!allowed(r->tx_id, r->data) || r->param_len > UDS_CLIENT_PARAM_MAX ||
+            r->param_offset + r->param_len > 1 + r->data[0]) {
             ESP_LOGE(TAG, "request %s is not on the allowlist", requests[i].name);
             return ESP_ERR_INVALID_ARG;
         }
@@ -372,18 +443,27 @@ void uds_client_on_frame(const can_log_frame_t *frame) {
 void uds_client_poll(int64_t now_us, bool bus_ok) {
     switch (state) {
     case STATE_IDLE: {
-        int index = atomic_exchange(&pending, -1);
+        uint8_t param[UDS_CLIENT_PARAM_MAX];
+        taskENTER_CRITICAL(&request_lock);
+        int index = pending;
+        pending = -1;
+        memcpy(param, pending_param, sizeof(param));
+        if (index >= 0) {
+            atomic_store(&busy, true);
+        }
+        taskEXIT_CRITICAL(&request_lock);
         if (index < 0) {
             return;
         }
-        atomic_store(&busy, true);
         current = &requests[index];
+        memcpy(request_data, current->data, sizeof(request_data));
+        memcpy(&request_data[current->param_offset], param, current->param_len);
         replies = 0;
         final_reply = false;
         isotp_active = false;
         flow_control_due = false;
         // An error-passive or bus-off node has been disturbing the bus already; don't add to it.
-        if (!bus_ok || !allowed(current)) {
+        if (!bus_ok || !allowed(current->tx_id, request_data)) {
             add_log(UDS_LOG_REFUSED, now_us / 1000, current->tx_id, 0, NULL);
             log_text_event(now_us, "uds_refused", current->name, 0);
             finish();
@@ -442,16 +522,26 @@ void IRAM_ATTR uds_client_on_tx_done_from_isr(bool success) {
     atomic_store(&tx_result, success ? TX_RESULT_OK : TX_RESULT_FAILED);
 }
 
-esp_err_t uds_client_request(const char *name) {
+esp_err_t uds_client_request(const char *name, const uint8_t *param, size_t param_len) {
     for (size_t i = 0; i < REQUEST_COUNT; i++) {
         if (strcmp(requests[i].name, name) != 0) {
             continue;
         }
-        int expected = -1;
-        if (atomic_load(&busy) || !atomic_compare_exchange_strong(&pending, &expected, (int) i)) {
-            return ESP_ERR_INVALID_STATE;
+        if (param_len != requests[i].param_len) {
+            return ESP_ERR_INVALID_ARG;
         }
-        return ESP_OK;
+        esp_err_t err = ESP_OK;
+        taskENTER_CRITICAL(&request_lock);
+        if (atomic_load(&busy) || pending >= 0) {
+            err = ESP_ERR_INVALID_STATE;
+        } else {
+            pending = (int) i;
+            if (param_len > 0) {
+                memcpy(pending_param, param, param_len);
+            }
+        }
+        taskEXIT_CRITICAL(&request_lock);
+        return err;
     }
     return ESP_ERR_NOT_FOUND;
 }

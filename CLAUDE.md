@@ -36,8 +36,10 @@ Standalone CAN bus logger built on a LilyGO T-CAN485 (ESP32) plugged into the ca
 - **Never disable `enable_listen_only` and never call `twai_node_transmit`** unless the user
   explicitly asks. This is a real car on the road. The one exception, requested by the user, is the separate
   `CONFIG_CAN_TX_MODE` test build: normal mode (ACKs every frame), and `uds_client` sends only its fixed,
-  allowlisted read-only requests (UDS `0x3E`/`0x22`, OBD-II mode `01`, on diagnostic IDs that never appear in the
-  car's traffic). It stays off by default and must never become the default car image. Never send on an ID the car
+  allowlisted requests (UDS `0x3E`/`0x22`/`0x19`, `0x10` default/extended session only, OBD-II mode `01`, on
+  diagnostic IDs that never appear in the car's traffic). Services that write, clear, reset, unlock or program
+  (`0x2E 0x14 0x11 0x27 0x31`, `10 02`) are documented in [docs/uds-write-services.md](docs/uds-write-services.md)
+  and stay out unless the user asks for that specific action. It stays off by default and must never become the default car image. Never send on an ID the car
   itself uses.
 - Don't add console output to the hot path (ISR, RX, SD writing). Logging during init or errors is
   acceptable during development. It must be removable via sdkconfig (log level), not by
@@ -120,7 +122,7 @@ TWAI ISR (on_rx_done) ──► ring of rx_slot_t + counting semaphores ──�
 | [main/wifi_ap.c](main/wifi_ap.c) / [.h](main/wifi_ap.h) | NVS, netif, SoftAP (menuconfig → Live view Wi-Fi; password in `sdkconfig.secrets`), mDNS `can-sniffer.local`. |
 | [main/web_server.c](main/web_server.c) / [.h](main/web_server.h) | httpd on core 1: `GET /` serves [main/web/index.html](main/web/index.html) (gzipped at build time), `/ws` pushes the frame table (binary, 5 Hz) and status (JSON, 1 Hz) and takes `rec on`/`rec off`/`mark <label>`. |
 | [main/web/index.html](main/web/index.html) | The page: no frameworks. Its signal table (JSON, PSA-RE bit notation) is the decoding for the live view; check it with `tools/check_page_signals.py`. |
-| [main/uds_client.c](main/uds_client.c) / [.h](main/uds_client.h) | `CONFIG_CAN_TX_MODE` build only (not compiled otherwise): a fixed list of single-frame diagnostic requests sent one at a time from the page, reply collection with ISO-TP reassembly (flow control only in answer to a first frame from the ECU just asked; replies up to 512 B), page log and `uds_*` events. See [docs/live-view.md](docs/live-view.md). |
+| [main/uds_client.c](main/uds_client.c) / [.h](main/uds_client.h) | `CONFIG_CAN_TX_MODE` build only (not compiled otherwise): a fixed list of single-frame diagnostic requests sent one at a time from the page, fault codes (`0x19`) and session control (`0x10`, red on the page), reply collection with ISO-TP reassembly (flow control only in answer to a first frame from the ECU just asked; replies up to 512 B), page log and `uds_*` events. See [docs/live-view.md](docs/live-view.md). |
 | [main/status_led.c](main/status_led.c) / [.h](main/status_led.h) | WS2812 status LED: `set`, timed `show_for` with a FreeRTOS one-shot timer, a "priority" flag that blocks other updates. |
 
 TWAI uses the **new v6 driver** (`esp_driver_twai`: `esp_twai.h`, `esp_twai_onchip.h`,
@@ -248,6 +250,8 @@ Captures are analyzed on the laptop. If helper scripts are added, put them under
 - `psare.py` decodes a capture with [PSA-RE](https://github.com/prototux/PSA-RE) frame definitions (needs a local
   checkout, kept at `~/projects/repos/PSA-RE`; the ë-C4 is `AEE2010.electric`, bus `HS.HS1`). PSA-RE covers 79 of the 87 IDs on this bus,
   but not every definition fits this car; check values before trusting one.
+- `bms_dtc_names.py <PSA-RE checkout>` copies the BMS fault-code names into the page (`bms-dtcs` block in
+  `index.html`); rerun it when PSA-RE's list changes.
 - `cell_soh.py` takes the per-cell SoH (BMS DID D4B5) from a TX mode session, writes it as CSV and compares it with
   an earlier one (`--compare`). Dated readings are kept in [docs/cell-soh/](docs/cell-soh/) (first: 2026-10-30).
 - Decoded signals, confidence levels and open questions: [docs/signals.md](docs/signals.md).

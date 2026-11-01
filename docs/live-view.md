@@ -102,7 +102,9 @@ a build option, not a runtime switch:
 History: an ACK-only build (normal mode, nothing sent) was tested in the car on 2026-10-20: no warnings, no bus
 errors, ~1.5k frames/s as usual. It was later merged into TX mode.
 
-Requests (`uds_client.c`, allowlisted in C to UDS `0x3E`, `0x22` and OBD-II mode `01`, single frames only):
+Requests (`uds_client.c`, allowlisted in C to UDS `0x3E`, `0x22`, `0x19` (`01`/`02`/`04`/`06`), `0x10`
+(`01`/`03` only, red buttons) and OBD-II mode `01`, single frames only; the services that change the ECU are
+documented, not implemented, in [uds-write-services.md](uds-write-services.md)):
 
 | Button | Frame | Reply |
 |--------|-------|-------|
@@ -111,6 +113,12 @@ Requests (`uds_client.c`, allowlisted in C to UDS `0x3E`, `0x22` and OBD-II mode
 | ABS: TesterPresent | `6AD#023E000000000000` | `68D#027E00` |
 | BMS: 22 reads (below) | `6B4#0322xxxx00000000` | `694#0n62xxxx` + value, or `694#037F22nn` |
 | BMS: 5 long reads (below) | `6B4#0322xxxx00000000` | ISO-TP multi-frame reply |
+| BMS extra: 30 more reads (below) | `6B4#0322xxxx00000000` | single frame |
+| BMS faults: Count | `6B4#03190109` | `59 01 <avail> <format> <count hi> <count lo>` |
+| BMS faults: Active / confirmed | `6B4#03190209` (status mask 09) | `59 02 <avail>` + 4 bytes per fault |
+| BMS faults: History | `6B4#0319022D` (mask 2D: also pending and "failed since last clear") | as above |
+| BMS faults: Snapshot / Extended data (from a fault's row) | `6B4#061904 <DTC> FF` / `061906 <DTC> FF` | `59 04` / `59 06` + records |
+| BMS session: Default / Extended (red) | `6B4#021001` / `021003` | `50 01` / `50 03` + P2 / P2* timing |
 
 BMS reads (`0x22`, one DID per request; PSA-RE `TBMU/BMU_CTE1`, value ≤ 4 bytes so the reply is one frame). The
 page decodes them (`DIDS` in `index.html`: big-endian value at byte offset `o`, `raw × f + off`), keeps the newest
@@ -146,7 +154,20 @@ docs/signals.md):
 | F080 | ECU identification: part number (BCD), supplier (`0074` = CATL), additional reference | decoded |
 | F0FE | Supplier identification: software edition, download date, number of downloads, software reference | decoded |
 | D901 | BMS serial number, ASCII | decoded |
-| D465 | 423 B here (PSA-RE: 408), unnamed; contains what looks like SoH histories | hex |
+| D465 | 423 B here (PSA-RE: 408), unnamed; SoH histories and counters (docs/signals.md) | BMS active time (b148-150, seconds, probably) + hex |
+
+BMS extra (PSA-RE encodings, not checked against the car yet): min / max charge level `D862`/`D863` (×1/512 %),
+SoC sensor calibration `D410`, why the switches last opened `D812`, switch state `D813`, switch welded `D814`,
+fuse F1 `D86B`, insulation + / − `D87B`/`D87C` (kΩ), 30 s power limits `D872`/`D874` and 10 s current limit
+`D876`, hottest / coldest module `D445`/`D446`, mileage `D49C` (×1/1024 km) and time counter `D4CA` (×0.1) as the
+BMS sees them, CAN fault record `D89E`, and the unnamed `F18C D900 E082 D416-D419 D41E-D423` (shown raw).
+
+Fault codes: each is 2 code bytes + a failure type byte + a status byte (ISO 14229). The page names them from
+PSA-RE's BMS list (embedded in `index.html` by `tools/bms_dtc_names.py`), explains the status bits (failing now,
+failed this drive, pending, confirmed, failed since last clear, warning lamp), and gives each fault Snapshot /
+Extended data buttons. The page parameter (the 3-byte DTC) is placed at a fixed position by `uds_client` and the
+finished frame is checked against the allowlist. The session buttons are red: `10 03` changes how the BMS
+behaves until it falls back to the default session (~5 s after the last request, unless TesterPresent keeps it).
 
 ISO-TP: a reply longer than 7 bytes starts with a first frame (`1L LL` + 6 bytes, `LLL` = total length). The node
 answers on the request ID with a flow control `30 00 01`: continue, block size 0 (send everything), at least 1 ms
@@ -184,7 +205,8 @@ second). The node receives its own requests back (loopback), so they appear in `
 `uds_done`, `uds_tx_failed` and `uds_refused`.
 
 The WebSocket gets a `{"type":"uds","requests":[…],"log":[…]}` message whenever the log changes, and once when a
-page connects; the page sends `uds <name>`. `requests` is `{name, label}` per button. `log` holds the last 16
+page connects; the page sends `uds <name>` or `uds <name> <hex>` (the parameter of a request that takes one).
+`requests` is `{name, label, param, danger}` per request (`param` = parameter bytes, 0 for none). `log` holds the last 16
 entries, oldest first: `{t, kind, req, id, len, data}` with `t` in board ms, `id` as a decimal number, `data` as 8
 bytes of hex, and `kind` one of `tx`, `rx`, `done`, `tx_failed`, `refused`, `message`, `rx_error` (for `done` and
 `tx_failed`, `len` is the number of replies or attempts; for `message` the reply length; for `rx_error` 0 =

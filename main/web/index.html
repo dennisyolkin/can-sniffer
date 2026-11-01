@@ -52,6 +52,13 @@
   .uds-group { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-bottom: .5rem; }
   .uds-group .lbl { width: 100%; }
   .uds-group button.run { border-color: var(--accent); color: var(--accent); }
+  /* Requests that change the ECU's state (session control). */
+  button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+  #uds-dtcs { margin: .3rem 0 .6rem; font-size: .9rem; }
+  #uds-dtcs .dtc { padding: .3rem 0; border-bottom: 1px solid var(--line); }
+  #uds-dtcs .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; }
+  #uds-dtcs .st { color: var(--muted); font-size: .8rem; }
+  #uds-dtcs button { font-size: .8rem; padding: .2rem .5rem; margin: .2rem .3rem 0 0; }
   #uds-values { display: grid; grid-template-columns: max-content 1fr; gap: .15rem .8rem; font-size: .9rem; margin: .3rem 0 .6rem; }
   #uds-values .t { color: var(--muted); font-size: .8rem; }
   #uds-messages details { margin-bottom: .3rem; }
@@ -297,6 +304,7 @@
   <div id="uds" hidden>
     <h2>Diagnostics</h2>
     <div id="uds-buttons"></div>
+    <div id="uds-dtcs"></div>
     <div id="uds-values"></div>
     <div id="uds-messages"></div>
     <div id="uds-log"></div>
@@ -378,6 +386,9 @@
   ]
 }
 </script>
+
+<!-- BMS fault-code names from PSA-RE; regenerate with tools/bms_dtc_names.py. -->
+<script type="application/json" id="bms-dtcs">{"_ftb":{"19":"Power too high"},"0560":["P0560","Traction battery ECU 12 V supply voltage",{"29":"Information incoherent"}],"0562":["P0562","Traction battery ECU 12 V supply voltage",{"16":"Voltage too low"}],"0563":["P0563","Traction battery ECU 12 V supply voltage",{"17":"Voltage too high"}],"058C":["P058C","Temperature of the traction battery modules",{"29":"Information incoherent"}],"0605":["P0605","Traction battery ECU",{"45":"Memory fault"}],"06A6":["P06A6","Traction battery voltage sensor",{"1C":"Voltage outside range"}],"06A7":["P06A7","Traction battery voltage sensor",{"1C":"Voltage outside range"}],"06A8":["P06A8","Traction battery internal sensors supply",{"1C":"Voltage outside range"}],"06A9":["P06A9","Traction battery internal sensors supply",{"1C":"Voltage outside range"}],"06AA":["P06AA","Traction battery ECU",{"98":"Internal temperature too high"}],"06B8":["P06B8","Traction battery ECU",{"43":"Internal temperature too high","44":"Configuration incorrect"}],"06D5":["P06D5","Traction battery internal sensors supply",{"1C":"Voltage outside range"}],"0A0A":["P0A0A","Line for control of the status of the electric circuit breaker connector and of the locking of the high voltage connectors",{"11":"Short circuit to earth","12":"Short circuit to positive","13":"Open circuit","29":"Information incoherent"}],"0A0B":["P0A0B","Line for control of the status of the electric circuit breaker connector and of the locking of the high voltage connectors",{"61":"Signal processing fault","67":"Signal not valid"}],"0A95":["P0A95","Traction battery internal fuse",{"13":"Open circuit"}],"0A9C":["P0A9C","Traction battery internal temperature sensor",{"86":"Value received out of range"}],"0AA1":["P0AA1","Traction battery internal positive power switch",{"67":"Signal not valid","73":"Actuator jammed shut"}],"0AA2":["P0AA2","Traction battery internal positive power switch",{"72":"Actuator jammed open"}],"0AA4":["P0AA4","Traction battery internal negative power switch",{"67":"Signal not valid","73":"Actuator jammed shut"}],"0AA5":["P0AA5","Traction battery internal negative power switch",{"72":"Actuator jammed open"}],"0AA7":["P0AA7","Traction battery isolation control system (traction circuit)",{"29":"Information incoherent"}],"0AC0":["P0AC0","Traction battery current sensor",{"1D":"Amperage out of range","28":"Drift downwards or upwards"}],"0AC6":["P0AC6","Temperature sensor of a traction battery module",{"86":"Value received out of range"}],"0ACB":["P0ACB","Temperature sensor of a traction battery module",{"86":"Value received out of range"}],"0AE1":["P0AE1","Traction battery internal power pre-charge switch circuit",{"12":"Short circuit to positive","13":"Open circuit"}],"0AFA":["P0AFA","Traction battery voltage",{"16":"Voltage too low"}],"0AFB":["P0AFB","Traction battery voltage",{"17":"Voltage too high"}],"0B0E":["P0B0E","Traction battery current sensor",{"11":"Short circuit to earth","15":"Short circuit to positive or open circuit","1D":"Amperage out of range","28":"Drift downwards or upwards"}],"0B13":["P0B13","Current sensors of the traction battery",{"64":"Signal not coherent"}],"0B3B":["P0B3B","Traction battery voltage",{"13":"Open circuit","1C":"Voltage outside range"}],"0B40":["P0B40","Traction battery voltage",{"13":"Open circuit","1C":"Voltage outside range"}],"0B45":["P0B45","Traction battery voltage",{"13":"Open circuit","1C":"Voltage outside range"}],"0B4A":["P0B4A","Traction battery voltage",{"13":"Open circuit","1C":"Voltage outside range"}],"0B4F":["P0B4F","Traction battery voltage",{"1C":"Voltage outside range"}],"0B54":["P0B54","Traction battery voltage",{"1C":"Voltage outside range"}],"0B59":["P0B59","Traction battery voltage",{"1C":"Voltage outside range"}],"0C38":["P0C38","Charging socket unit temperature",{"98":"Internal temperature too high"}],"0C3D":["P0C3D","Charging socket unit temperature",{"98":"Internal temperature too high"}],"0C41":["P0C41","Charging socket unit temperature",{"29":"Information incoherent"}],"0C6E":["P0C6E","Temperature of one of the traction battery modules",{"64":"Signal not coherent"}],"0C6F":["P0C6F","Temperature of one of the traction battery modules",{"64":"Signal not coherent"}],"0C70":["P0C70","Temperature of one of the traction battery modules",{"64":"Signal not coherent"}],"0C78":["P0C78","Traction battery internal power pre-charge switch circuit",{"63":"Circuit protection time elapsed+/+component"}],"0CA6":["P0CA6","Traction battery charge current",{"19":"Power too high","22":"Value higher than setting","24":"Signal stuck at high status"}],"0CA7":["P0CA7","Traction battery discharge current",{"19":"Power too high","22":"Value higher than setting","24":"Signal stuck at high status"}],"0D07":["P0D07","Traction battery internal rapid charging circuit positive power switch",{"11":"Short circuit to earth","13":"Open circuit","72":"Actuator jammed open"}],"0D08":["P0D08","Traction battery internal rapid charging circuit positive power switch",{"73":"Actuator jammed shut"}],"0D0D":["P0D0D","Traction battery internal rapid charging circuit negative power switch",{"11":"Short circuit to earth","13":"Open circuit"}],"0D0F":["P0D0F","Traction battery internal rapid charging circuit negative power switch",{"73":"Actuator jammed shut"}],"0D10":["P0D10","Traction battery internal rapid charging circuit negative power switch",{"72":"Actuator jammed open","73":"Actuator jammed open"}],"0D37":["P0D37","Current of the traction battery",{"09":"Fault not clear","19":"Power too high","22":"Value higher than setting","24":"Signal stuck at high status","85":"Signal above the permitted threshold"}],"0D99":["P0D99","Charging socket unit temperature",{"98":"Internal temperature too high"}],"0DAB":["P0DAB","Traction battery cells balancing circuit",{"11":"Short circuit to earth","12":"Open circuit"}],"0DE6":["P0DE6","Under-voltage of one of the traction battery cells",{"09":"Fault not clear","16":"Voltage too low"}],"0DE7":["P0DE7","Over-voltage of one of the traction battery cells",{"09":"Fault not clear"}],"0E6C":["P0E6C","Traction battery internal power pre-charge switch circuit",{"72":"Actuator jammed open"}],"11E3":["P11E3","Current of the traction battery",{}],"1A00":["P1A00","Voltage sensors of the traction battery",{"1D":"Amperage out of range","28":"Drift downwards or upwards"}],"1A02":["P1A02","Voltage sensors of the traction battery",{"11":"Short circuit to earth","15":"Short circuit to positive or open circuit"}],"1A03":["P1A03","Partial voltage sensor of the traction battery",{"29":"Information incoherent"}],"1A04":["P1A04","Partial voltage sensor of the traction battery",{"13":"Open circuit","1C":"Voltage outside range"}],"1A05":["P1A05","ECU and traction battery assembly",{"13":"Open circuit","1C":"Voltage outside range"}],"1A06":["P1A06","ECU and traction battery assembly",{"13":"Open circuit","1C":"Voltage outside range"}],"1A10":["P1A10","Traction battery current sensor",{"29":"Information incoherent"}],"1A12":["P1A12","Traction battery current sensor",{"16":"Voltage too low","17":"Voltage too high","29":"Information incoherent","45":"Memory fault (programme)"}],"1A13":["P1A13","Traction battery current sensor",{"11":"Short circuit to earth","13":"Open circuit","16":"Voltage too low","17":"Voltage too high"}],"1A14":["P1A14","Traction battery",{"98":"Internal temperature too high"}],"1A15":["P1A15","Traction battery",{"98":"Internal temperature too high"}],"1A16":["P1A16","Traction battery",{"29":"Information incoherent","98":"Internal temperature too high"}],"1A17":["P1A17","Insulation detection circuit of the traction battery",{"98":"Internal temperature too high"}],"1A19":["P1A19","Fault on the electric motor ECU (MCU)",{"94":"Unexpected behaviour"}],"1A1C":["P1A1C","Fault on the voltage of the traction battery detected by the electric motor ECU (MCU)",{"47":"Internal fault"}],"1A1E":["P1A1E","Internal memory fault in the electric motor ECU (MCU)",{"47":"Internal fault"}],"1A20":["P1A20","Temperature sensors of the cells of the traction battery",{"98":"Internal temperature too high"}],"1A21":["P1A21","Temperature sensors of the cells of the traction battery",{"98":"Internal temperature too high"}],"1A22":["P1A22","Temperature sensors of the cells of the traction battery",{"44":"Configuration incorrect"}],"1A23":["P1A23","Temperature sensors of the cells of the traction battery",{"1C":"Voltage outside range","44":"Configuration incorrect","52":"Configuration not valid"}],"1A24":["P1A24","Temperature sensors of the cells of the traction battery",{"1C":"Voltage outside range"}],"1A25":["P1A25","Temperature sensors of the cells of the traction battery",{"01":"Electrical fault","11":"Short circuit to earth","12":"Short-circuit to positive","13":"Open circuit","29":"Information incoherent","4B":"Temperature too high"}],"1A26":["P1A26","Electric motor ECU (MCU) capacitor fault",{"1C":"Voltage outside range"}],"1A2B":["P1A2B","Fault on the three-phase line detected by the electric motor ECU (MCU)",{"64":"Signal not coherent"}],"1A30":["P1A30","Voltage fault in the cells of the traction battery",{"01":"Electrical fault"}],"1A31":["P1A31","Voltage fault in the cells of the traction battery",{"11":"Short circuit to earth","12":"Short-circuit to positive","29":"Information incoherent"}],"1A32":["P1A32","Fault with the temperature of the traction battery",{"1E":"Resistance outside the range"}],"1A33":["P1A33","Traction battery temperature sensor fault",{"1E":"Resistance outside the range"}],"1A34":["P1A34","Traction battery temperature sensor fault",{"1E":"Resistance outside the range"}],"1A35":["P1A35","Traction battery temperature sensor fault",{"1E":"Resistance outside the range"}],"1A39":["P1A39","Fault on the traction battery charge status",{"64":"Signal not coherent"}],"1A3D":["P1A3D","Fault on the reference voltage of the converter detected by the electric motor ECU (MCU)",{"1B":"Resistance above a threshold"}],"1A3E":["P1A3E","Fault in the temperature of the processor detected by the electric motor ECU (MCU)",{"29":"Information incoherent"}],"1A40":["P1A40","Traction battery sensor fault (350 A)",{"17":"Voltage too high"}],"1A41":["P1A41","Traction battery sensor fault (30 A)",{"17":"Voltage too high"}],"1A42":["P1A42","Battery sensor supply circuit fault",{"17":"Voltage too high","92":"Performance or operation does not conform"}],"1A43":["P1A43","Battery sensor detection circuit fault",{"16":"Voltage too low","92":"Performance or operation does not conform"}],"1A44":["P1A44","Leak sensor fault",{"16":"Voltage too low"}],"1A45":["P1A45","Leak sensor supply circuit fault",{"16":"Voltage too low"}],"1A46":["P1A46","Leak sensor detection circuit fault",{"16":"Voltage too low"}],"1A47":["P1A47","Traction battery fan assembly relay fault (Fast Speed)",{"17":"Voltage too high"}],"1A49":["P1A49","Driving relay fault",{"64":"Signal not coherent"}],"1A4B":["P1A4B","Traction battery cells voltage measurements",{"29":"Information incoherent","62":"Lack of coherence of the signal","64":"Signal not coherent"}],"1A50":["P1A50","Traction battery internal power pre-charge switch circuit",{"13":"Open circuit","4A":"Component incompatible","86":"Value received out of range"}],"1A51":["P1A51","Traction battery internal power pre-charge switch circuit",{"11":"Short circuit to earth"}],"1A52":["P1A52","Traction battery internal positive power switch",{"13":"Open circuit"}],"1A53":["P1A53","Traction battery internal positive power switch",{"11":"Short circuit to earth","16":"Voltage too low","17":"Voltage too high"}],"1A54":["P1A54","Traction battery internal negative power switch",{"13":"Open circuit"}],"1A55":["P1A55","Traction battery internal negative power switch",{"11":"Short circuit to earth"}],"1A57":["P1A57","Traction battery controller 06 cells fault",{"1B":"Resistance above a threshold"}],"1A58":["P1A58","Traction battery controller 07 cells fault",{"1B":"Resistance above a threshold"}],"1A59":["P1A59","Temperature of one of the traction battery modules",{"1B":"Resistance above a threshold"}],"1A60":["P1A60","Traction battery controller 03 cells fault",{"98":"Internal temperature too high"}],"1A61":["P1A61","Traction battery cell voltage sensor",{"98":"Internal temperature too high"}],"1A62":["P1A62","Traction battery controller 05 cells fault",{}],"1A63":["P1A63","Traction battery controller 06 cells fault",{}],"1A64":["P1A64","Traction battery controller 07 cells fault",{}],"1A65":["P1A65","Traction battery controller 08 cells fault",{}],"1A66":["P1A66","Traction battery controller 09 cells fault",{}],"1A67":["P1A67","Traction battery controller 10 cells fault",{}],"1A68":["P1A68","Traction battery controller 11 cells fault",{}],"1A69":["P1A69","Traction battery controller 12 cells fault",{}],"1A6A":["P1A6A","Traction battery controller 01 accumulator temperature fault",{}],"1A6B":["P1A6B","Traction battery controller 02 accumulator temperature fault",{}],"1A70":["P1A70","Traction battery controller 07 accumulator temperature fault",{}],"1A76":["P1A76","Traction battery controller 01 cells voltage sensor fault",{}],"1A77":["P1A77","Traction battery controller 02 cells voltage sensor fault",{}],"1A7A":["P1A7A","Traction battery controller 05 cells voltage sensor fault",{"1A":"Resistance below a threshold"}],"1A7B":["P1A7B","Traction battery controller 06 cells voltage sensor fault",{"1A":"Resistance below a threshold"}],"1A7C":["P1A7C","Traction battery controller 07 cells voltage sensor fault",{"1A":"Resistance below a threshold"}],"1A7D":["P1A7D","Traction battery controller 08 cells voltage sensor fault",{"1A":"Resistance below a threshold"}],"1A7E":["P1A7E","Traction battery controller 09 cells voltage sensor fault",{"1A":"Resistance below a threshold"}],"1A7F":["P1A7F","Traction battery controller 10 cells voltage sensor fault",{"1A":"Resistance below a threshold"}],"1A80":["P1A80","Traction battery controller 11 cells voltage sensor fault",{"1A":"Resistance below a threshold"}],"1A90":["P1A90","Reversible alternator",{"11":"Short circuit to earth","13":"Open circuit"}],"1A91":["P1A91","Reversible alternator",{"73":"Actuator jammed shut"}],"1A92":["P1A92","Reversible alternator",{"73":"Actuator jammed shut"}],"1A93":["P1A93","Reversible alternator",{"73":"Actuator jammed shut"}],"1A94":["P1A94","Reversible alternator",{"73":"Actuator jammed shut"}],"1A95":["P1A95","Reversible alternator",{"00":"Not characterised","13":"Open circuit","72":"Actuator jammed open","96":"Internal fault"}],"1A96":["P1A96","Reversible alternator",{"00":"Not characterised","72":"Actuator jammed open","96":"Internal fault"}],"1A97":["P1A97","Reversible alternator",{"00":"Not characterised","72":"Actuator jammed open","96":"Internal fault"}],"1A98":["P1A98","Reversible alternator",{"00":"Not characterised","72":"Actuator jammed open","73":"Actuator jammed shut","96":"Internal fault"}],"1A99":["P1A99","Reversible alternator",{"00":"Not characterised","72":"Actuator jammed open","73":"Actuator jammed shut","96":"Internal fault"}],"1A9A":["P1A9A","Automatic numbering error",{"73":"Actuator jammed shut"}],"1A9B":["P1A9B","Fault of modification of the identification with the traction battery controller 01",{"11":"Short circuit to earth","13":"Open circuit"}],"1A9C":["P1A9C","Fault of modification of the identification with the traction battery controller 02",{"11":"Short circuit to earth","13":"Open circuit"}],"1A9E":["P1A9E","Fault of modification of the identification with the traction battery controller 04",{"11":"Short circuit to earth","13":"Open circuit"}],"1A9F":["P1A9F","Fault of modification of the identification with the traction battery controller 05",{"11":"Short circuit to earth","13":"Open circuit"}],"1AAC":["P1AAC","Error in communication with the traction battery controller 04",{"11":"Short circuit to earth","13":"Open circuit"}],"1AEA":["P1AEA","Traction battery electric circuit breaker connector",{"13":"Open circuit","16":"Voltage too low"}],"1AF2":["P1AF2","Traction battery internal power switches request counter",{"22":"Value higher than setting"}],"1B79":["P1B79","Vehicle crash information wire circuit",{"11":"Short circuit to earth","25":"Non-coherent variation of the signal"}],"1B7A":["P1B7A","Vehicle crash information received by wire and via the CAN",{"29":"Information incoherent"}],"1B7B":["P1B7B","Production of current by the traction battery in rapid charging phase",{}],"1B7C":["P1B7C","Traction battery internal rapid charging circuit positive and negative power switches",{"73":"Actuator jammed shut"}],"3073":["P3073","Traction battery ECU",{"48":"Internal fault"}],"3074":["P3074","Traction battery ECU",{"01":"Electrical fault"}],"3075":["P3075","Traction battery ECU",{"01":"Electrical fault"}],"3076":["P3076","Traction battery ECU",{"01":"Electrical fault"}],"3078":["P3078","Traction battery ECU",{"94":"Unexpected behaviour"}],"C078":["U0078","Electric drive train CAN",{"88":"CAN in error"}],"C091":["U0091","Malfunction of the CAN",{"88":"CAN in error"}],"D14A":["U114A","Information sent by the electric drive train supervisor ECU(Electric drive train CAN)",{"87":"Missing information"}],"D189":["U1189","Information sent by the on-board charger/direct voltage transformer assembly ECU(Electric drive train CAN)",{"87":"Missing information"}],"D207":["U1207","Information sent by the electric drive train supervisor ECU(Electric drive train CAN)",{"81":"Data received invalid"}],"D2DE":["U12DE","Information sent by the on-board charger/direct voltage transformer assembly ECU(Electric drive train CAN)",{"81":"Data received invalid"}],"D307":["U1307","Information sent by the electric drive train supervisor ECU(Electric drive train CAN)",{"82":"Communication not valid","83":"Communication not valid"}],"D389":["U1389","Information sent by the on-board charger/direct voltage transformer assembly ECU(Electric drive train CAN)",{"82":"Communication not valid","83":"Communication not valid"}],"D600":["U1600","Information sent by the electric drive train supervisor ECU(Electric drive train CAN)",{"87":"Missing information"}],"E000":["U2000","Remote-controlled triggering CAN signal",{"81":"Data received invalid","87":"Missing information"}],"E003":["U2003","Request for ECU wake-up (wire signal) inconsistent with the CAN data",{"62":"Lack of coherence of the signal"}]}</script>
 
 <script>
 "use strict";
@@ -781,6 +792,33 @@ const DIDS = {
   0xD86D: { n: "Balancing", o: 0, l: 1, e: ["correct", "incorrect"] },
   0xD47A: { n: "Insulation", o: 0, l: 4, u: "kΩ" },
   0xD822: { n: "12 V battery", o: 0, l: 2, f: 0.001, u: "V", d: 2 },
+  // BMS extra (PSA-RE; not checked against the car yet).
+  0xD862: { n: "Min charge level", o: 0, l: 2, f: 1 / 512, u: "%", d: 1 },
+  0xD863: { n: "Max charge level", o: 0, l: 2, f: 1 / 512, u: "%", d: 1 },
+  0xD410: { n: "SoC sensor calibration", o: 0, l: 2, f: 1 / 512, u: "%", d: 1 },
+  0xD812: { n: "Why switches opened", o: 0, l: 1, e: ["no error", "vehicle impact", "supply voltage too low",
+    "supply voltage too high", "battery temperature too high", "circuit breaker opened", undefined, "invalid status"] },
+  0xD813: { n: "Switch state", o: 0, l: 1, e: ["open", "precharging", "closed"] },
+  0xD814: { n: "Switch welded?", o: 0, l: 1, e: ["not welded", "WELDED"] },
+  0xD86B: { n: "Fuse F1", o: 0, l: 1, e: ["good", "not conforming"] },
+  0xD87B: { n: "Insulation +", o: 0, l: 4, u: "kΩ" },
+  0xD87C: { n: "Insulation −", o: 0, l: 4, u: "kΩ" },
+  0xD872: { n: "Charge limit 30 s", o: 0, l: 4, f: 1 / 128, off: -500, u: "kW", d: 1 },
+  0xD874: { n: "Discharge limit 30 s", o: 0, l: 4, f: 1 / 128, off: -500, u: "kW", d: 1 },
+  0xD876: { n: "Current limit 10 s", o: 0, l: 4, f: 1 / 64, off: -1200, u: "A", d: 1 },
+  0xD445: { n: "Hottest module", o: 0, l: 1 },
+  0xD446: { n: "Coldest module", o: 0, l: 1 },
+  0xD49C: { n: "Mileage (BMS)", o: 0, l: 4, f: 1 / 1024, u: "km", d: 1 },
+  0xD4CA: { n: "Time counter (BMS)", o: 0, l: 4, f: 0.1, u: "s?", d: 1 },
+  0xD89E: { n: "CAN fault record", o: 0, l: 3, raw: true },
+  0xF18C: { n: "F18C", o: 0, l: 1, raw: true },
+  0xD900: { n: "D900", o: 0, l: 1, raw: true },
+  0xE082: { n: "E082", o: 0, l: 4, raw: true },
+  0xD416: { n: "D416", o: 0, l: 4, raw: true }, 0xD417: { n: "D417", o: 0, l: 4, raw: true },
+  0xD418: { n: "D418", o: 0, l: 4, raw: true }, 0xD419: { n: "D419", o: 0, l: 4, raw: true },
+  0xD41E: { n: "D41E", o: 0, l: 4, raw: true }, 0xD41F: { n: "D41F", o: 0, l: 4, raw: true },
+  0xD420: { n: "D420", o: 0, l: 4, raw: true }, 0xD421: { n: "D421", o: 0, l: 4, raw: true },
+  0xD422: { n: "D422", o: 0, l: 4, raw: true }, 0xD423: { n: "D423", o: 0, l: 4, raw: true },
   0xF18B: { n: "Manufacturing date", o: 0, l: 3, bcd: true },
 };
 
@@ -798,6 +836,11 @@ function decodeDid(b) {
   const value = b.slice(4, 1 + b[0]).slice(spec.o, spec.o + spec.l);
   if (value.length < spec.l) return { did, name: spec.n, text: "short reply" };
   if (spec.bcd) return { did, name: spec.n, text: value.map(x => hex(x)).join(" ") };
+  if (spec.raw) {
+    let n = 0;
+    for (const x of value) n = n * 256 + x;
+    return { did, name: spec.n, text: `${value.map(x => hex(x)).join(" ")} (${n})` };
+  }
   let raw = 0;
   for (const x of value) raw = raw * 256 + x;  // Not <<: a 4-byte value would turn negative.
   if (spec.e) return { did, name: spec.n, text: spec.e[raw] || "0x" + hex(raw) };
@@ -837,8 +880,74 @@ const LONG_DIDS = {
   0xD901: { n: "Serial number", decode: v => [
     { name: "BMS serial number", text: String.fromCharCode(...v.filter(x => x >= 0x20 && x < 0x7F)) },
   ] },
-  0xD465: { n: "D465" },
+  0xD465: { n: "D465", decode: v => {
+    if (v.length < 151) return [];
+    // b148-150, 24-bit big-endian: +8,605 over a ~2.4 h charge, +3,551 over a ~1 h drive, +108 in 123 s parked
+    // (bms-isotp-1, bms-abc-*), so most likely seconds the BMS has been awake. Not in PSA-RE.
+    const s = (v[148] << 16) | (v[149] << 8) | v[150];
+    return [{ name: "BMS active time (probably)", text: `${(s / 3600).toFixed(1)} h (${s} s)` }];
+  } },
 };
+
+// --- Fault codes (0x19) and session (0x10) ---
+
+const DTC_NAMES = JSON.parse(document.getElementById("bms-dtcs").textContent);
+// ISO 14229 DTC status bits, the ones worth showing.
+const DTC_STATUS = [[0, "failing now"], [1, "failed this drive"], [2, "pending"], [3, "confirmed"],
+  [5, "failed since last clear"], [7, "warning lamp"]];
+const SESSIONS = { 1: "default", 2: "programming", 3: "extended" };
+
+// 3 DTC bytes + status → { raw, code, name, failure, status, hexParam }.
+function dtcEntry(b0, b1, ftb, status) {
+  const raw = hex(b0) + hex(b1), known = DTC_NAMES[raw];
+  const code = known ? known[0] : "PCBU"[b0 >> 6] + hex(b0 & 0x3F) + hex(b1);
+  const failure = (known && known[2][hex(ftb)]) || (DTC_NAMES._ftb || {})[hex(ftb)] || "failure type " + hex(ftb);
+  const bits = DTC_STATUS.filter(([bit]) => status & (1 << bit)).map(([, text]) => text);
+  return { raw, code, name: known ? known[1] : "not in PSA-RE", failure, status: bits.join(", ") || "no status bits",
+    statusByte: status, hexParam: raw + hex(ftb) };
+}
+
+let dtcList = null;    // { t, items, mask } from the latest 59 02
+let dtcCount = null;   // { t, n } from the latest 59 01
+let session = null;    // { t, type, p2, p2star } from the latest 50 xx
+
+// Short description of a positive 0x59 / 0x50 reply, for the log line.
+function describeUds(p) {
+  if (p[0] === 0x59 && p[1] === 0x01 && p.length >= 6) return `fault count = ${(p[4] << 8) | p[5]}`;
+  if (p[0] === 0x59 && p[1] === 0x02) return `${Math.floor((p.length - 3) / 4)} fault code(s)`;
+  if (p[0] === 0x59 && (p[1] === 0x04 || p[1] === 0x06)) return `${p[1] === 4 ? "snapshot" : "extended data"}, ${p.length} bytes`;
+  if (p[0] === 0x50) return `session ${SESSIONS[p[1]] || hex(p[1])}`;
+  return null;
+}
+
+const newer = (state, t) => !state || t >= state.t;
+
+// Every positive reply payload (single frame or reassembled) goes through here.
+function handlePayload(p, t) {
+  if (p[0] === 0x62 && p.length >= 3) {
+    const did = (p[1] << 8) | p[2];
+    if (LONG_DIDS[did] || p.length > 7) {
+      const spec = LONG_DIDS[did] || { n: "DID " + hex(did, 4) };
+      udsMessages.set(hex(did, 4), { name: spec.n, bytes: p.slice(3), t });
+      for (const [i, item] of (spec.decode ? spec.decode(p.slice(3)) : []).entries()) {
+        udsValues.set(did * 16 + i, { did, ...item, t });
+      }
+    }
+  } else if (p[0] === 0x59 && p[1] === 0x01 && p.length >= 6) {
+    if (newer(dtcCount, t)) dtcCount = { t, n: (p[4] << 8) | p[5] };
+  } else if (p[0] === 0x59 && p[1] === 0x02 && newer(dtcList, t)) {
+    const items = [];
+    for (let i = 3; i + 3 < p.length; i += 4) items.push(dtcEntry(p[i], p[i + 1], p[i + 2], p[i + 3]));
+    dtcList = { t, items };
+  } else if (p[0] === 0x59 && (p[1] === 0x04 || p[1] === 0x06) && p.length >= 6) {
+    const e = dtcEntry(p[2], p[3], p[4], p[5]);
+    udsMessages.set(`${e.code}-${hex(p[4])} ${p[1] === 4 ? "snapshot" : "extended"}`,
+      { name: `${e.name} (${e.failure})`, bytes: p.slice(6), t });
+  } else if (p[0] === 0x50 && p.length >= 2 && newer(session, t)) {
+    session = { t, type: p[1], p2: p.length >= 4 ? (p[2] << 8) | p[3] : null,
+      p2star: p.length >= 6 ? ((p[4] << 8) | p[5]) * 10 : null };
+  }
+}
 
 // One line per log entry; replies are explained as ISO-TP frames + UDS response.
 function udsLine(e) {
@@ -863,7 +972,7 @@ function udsLine(e) {
     cls = b[3] === 0x78 ? "meta" : "neg";
   } else {
     const v = decodeDid(b);
-    what = v ? `${v.name} = ${v.text}` : "positive";
+    what = v ? `${v.name} = ${v.text}` : describeUds(b.slice(1, 1 + b[0])) || "positive";
     cls = "pos";
   }
   return [t + "← " + frame + " · " + what, cls];
@@ -871,7 +980,7 @@ function udsLine(e) {
 
 const FINAL_KINDS = ["done", "tx_failed", "refused"];
 const udsValues = new Map();  // DID → { name, text, t }, newest reply per DID; survives the 16-entry board log
-const udsMessages = new Map();  // DID → { name, bytes, t }, newest multi-frame reply per DID
+const udsMessages = new Map();  // key (DID hex, or DTC + record type) → { name, bytes, t }, newest per key
 let udsMessageSeq = 0;
 let readAll = null;           // { queue: [names], current, after (board ms), sentAt (Date.now()) }
 
@@ -897,19 +1006,17 @@ function onUds(msg) {
     udsMessageSeq = m.seq;
     const p = [];
     for (let i = 0; i < m.data.length; i += 2) p.push(parseInt(m.data.slice(i, i + 2), 16));
-    if (p[0] === 0x62 && p.length >= 3) {
-      const did = (p[1] << 8) | p[2], spec = LONG_DIDS[did] || { n: "DID " + hex(did, 4) };
-      udsMessages.set(did, { name: spec.n, bytes: p.slice(3), t: m.t });
-      for (const [i, item] of (spec.decode ? spec.decode(p.slice(3)) : []).entries()) {
-        udsValues.set(did * 16 + i, { did, ...item, t: m.t });
-      }
-    }
+    handlePayload(p, m.t);
   }
   for (const e of msg.log) {
     if (e.kind !== "rx") continue;
-    const v = decodeDid(frameBytes(e));
+    const b = frameBytes(e);
+    if (b[0] >> 4 !== 0) continue;  // First frames: the reassembled message is handled above.
+    const v = decodeDid(b);
     const old = v && udsValues.get(v.did);
     if (v && (!old || old.t <= e.t)) udsValues.set(v.did, { ...v, t: e.t });
+    // The log is resent with every change; handlePayload ignores replies older than what it has.
+    handlePayload(b.slice(1, 1 + b[0]), e.t);
   }
   if (!readAll) return;
   const finished = msg.log.some(e => e.req === readAll.current && FINAL_KINDS.includes(e.kind) && e.t > readAll.after);
@@ -924,6 +1031,51 @@ function toggleReadAll(names) {
   dirty = true;
 }
 
+function renderDtcs(online) {
+  const box = $("#uds-dtcs");
+  const rows = [];
+  if (session) {
+    const d = document.createElement("div");
+    d.className = "st";
+    d.textContent = `BMS session: ${SESSIONS[session.type] || hex(session.type)}` +
+      (session.p2 !== null ? ` (P2 ${session.p2} ms, P2* ${session.p2star} ms)` : "") +
+      ` at ${(session.t / 1000).toFixed(0)} s. The extended session ends by itself ~5 s after the last request.`;
+    rows.push(d);
+  }
+  if (dtcCount) {
+    const d = document.createElement("div");
+    d.textContent = `Fault count (active / confirmed): ${dtcCount.n} at ${(dtcCount.t / 1000).toFixed(0)} s`;
+    rows.push(d);
+  }
+  if (dtcList) {
+    if (!dtcList.items.length) {
+      const d = document.createElement("div");
+      d.textContent = `No fault codes in the last list (${(dtcList.t / 1000).toFixed(0)} s)`;
+      rows.push(d);
+    }
+    for (const e of dtcList.items) {
+      const d = document.createElement("div");
+      d.className = "dtc";
+      const c = document.createElement("span");
+      c.className = "code";
+      c.textContent = e.code + " ";
+      const st = document.createElement("div");
+      st.className = "st";
+      st.textContent = `${e.failure} · ${e.status} (status ${hex(e.statusByte)})`;
+      d.append(c, e.name, st);
+      for (const [name, label] of [["bms_dtc_snapshot", "Snapshot"], ["bms_dtc_extended", "Extended data"]]) {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.disabled = !online || udsBusy() || !!readAll;
+        b.onclick = () => send(`uds ${name} ${e.hexParam}`);
+        d.append(b);
+      }
+      rows.push(d);
+    }
+  }
+  box.replaceChildren(...rows);
+}
+
 function renderUds() {
   $("#uds").hidden = !uds;
   if (!uds) return;
@@ -934,7 +1086,7 @@ function renderUds() {
   if (box.dataset.count !== String(uds.requests.length)) {
     box.dataset.count = uds.requests.length;
     const groups = new Map();
-    for (const r of uds.requests) {
+    for (const r of uds.requests.filter(r => !r.param)) {
       const [group, text] = r.label.includes(": ") ? r.label.split(": ", 2) : ["", r.label];
       if (!groups.has(group)) groups.set(group, []);
       groups.get(group).push({ ...r, text });
@@ -946,7 +1098,7 @@ function renderUds() {
       l.className = "lbl";
       l.textContent = group;
       g.append(l);
-      const reads = reqs.filter(r => /_d[0-9a-f]{3,4}$|_f[0-9a-f]{3}$/.test(r.name)).map(r => r.name);
+      const reads = reqs.filter(r => /_[0-9a-f]{4}$/.test(r.name)).map(r => r.name);
       if (reads.length > 1) {
         const all = document.createElement("button");
         all.className = "run";
@@ -954,9 +1106,14 @@ function renderUds() {
         all.onclick = () => toggleReadAll(reads);
         g.append(all);
       }
-      for (const r of reqs) {
+      // Requests with a parameter (DTC snapshot / extended data) are sent from the fault list instead.
+      for (const r of reqs.filter(r => !r.param)) {
         const b = document.createElement("button");
         b.textContent = r.text;
+        if (r.danger) {
+          b.className = "danger";
+          b.title = "Changes the ECU's diagnostic session";
+        }
         b.onclick = () => send("uds " + r.name);
         g.append(b);
       }
@@ -971,6 +1128,7 @@ function renderUds() {
       b.disabled = !online || udsBusy() || !!readAll;
     }
   }
+  renderDtcs(online);
   const values = $("#uds-values");
   values.replaceChildren(...[...udsValues.values()].sort((a, b) => a.name.localeCompare(b.name)).flatMap(v => {
     const k = document.createElement("div");
@@ -990,7 +1148,7 @@ function renderUds() {
     msgBox.replaceChildren(...[...udsMessages].map(([did, m]) => {
       const d = document.createElement("details");
       const sum = document.createElement("summary");
-      sum.textContent = `${hex(did, 4)} ${m.name} · ${m.bytes.length} bytes · ${(m.t / 1000).toFixed(0)} s`;
+      sum.textContent = `${did} ${m.name} · ${m.bytes.length} bytes · ${(m.t / 1000).toFixed(0)} s`;
       const pre = document.createElement("pre");
       const rows = [];
       for (let i = 0; i < m.bytes.length; i += 16) {
