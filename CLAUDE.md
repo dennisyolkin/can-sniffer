@@ -252,6 +252,8 @@ Captures are analyzed on the laptop. If helper scripts are added, put them under
   but not every definition fits this car; check values before trusting one.
 - `bms_dtc_names.py <PSA-RE checkout>` copies the BMS fault-code names into the page (`bms-dtcs` block in
   `index.html`); rerun it when PSA-RE's list changes.
+- `trip_energy.py` counts energy drawn / regenerated over a capture the way the page's "This trip" panel does
+  (`3A8` counters and `563` × `5C3`), to pin down the `3A8` unit after a drive.
 - `cell_soh.py` takes the per-cell SoH (BMS DID D4B5) from a TX mode session, writes it as CSV and compares it with
   an earlier one (`--compare`). Dated readings are kept in [docs/cell-soh/](docs/cell-soh/) (first: 2026-10-30).
 - Decoded signals, confidence levels and open questions: [docs/signals.md](docs/signals.md).

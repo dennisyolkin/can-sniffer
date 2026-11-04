@@ -21,6 +21,8 @@ Sources:
 - **bms-isotp-1** (2026-10-30): parked, TX mode; the five multi-frame BMS reads (ISO-TP), all complete.
 - **bms-abc-1** (2026-10-31/11-01): parked right after an AC charge to 100 %, 25,832 km; every BMS read, fault codes.
 - **bms-abc-2 / -3**: the same reads after an 88 km drive, 70.2 %, 25,920 km (two sessions a minute apart).
+- **trip-20261104** (2026-11-04): 35.5 min, 19 km at 8 °C, **100 % of frames**. First 118 s parked: all four windows
+  down / a bit up / auto up (no Mark presses). TX mode; BMS Read all at the end (no fault-code reads).
 - **PSA-RE** ([github.com/prototux/PSA-RE](https://github.com/prototux/PSA-RE)): community database of PSA
   frames in YAML. The ë-C4 is car code `C41`, architecture `AEE2010.electric` (child of `.ev`, `.full`).
   Decode a capture with `tools/psare.py <session> <PSA-RE checkout>`; it resolves the variant chain.
@@ -57,7 +59,7 @@ with a 4-bit checksum + 4-bit process counter.
 | 583 | b3 bit 5 | "High battery temperature alert" | | doubtful | Set for the whole trip at 12 °C; probably mislabelled |
 | 522 | b4 | HV battery average temperature | raw − 40 °C | PSA-RE | 12 °C |
 | 454 | | **SoH capacity 91 %, SoH resistance 91 %**, main relay counter 6200, DC-charge relay counter 800, lifetime 11,375 Ah | | PSA-RE | Constant (sent ~1/s). SoH capacity matches BMS DID `D860` (90.94 %). Lifetime 11,375 Ah × ~390 V ≈ 4.4 MWh over 25,832 km ≈ 170 Wh/km: plausible as lifetime discharge |
-| 3A8 | b0, b1, b2 | Consumed / balance / regenerated energy counters | ×2 Wh | PSA-RE | Wrap around |
+| 3A8 | b0, b1, b2 | Energy counters since the start of the drive cycle, 1 byte each, wrapping: **b0 = net, b1 = drawn (only rises), b2 = regenerated (counts down)**; b0 = b1 − regen. Every 0.5 s. **Reset to 0 / 0 / 254 at each drive cycle** (trip-20261104: at ready, 108 s, and at the wake-up at 2051 s) | **1 Wh per unit, 2 Wh steps** (all values even; PSA-RE's "×2 Wh" is the step) | verified | trip-20261104 (complete, resets skipped): drawn 3,694 / regen 704 / net 2,988 Wh vs 563 × 5C3 3.82 / 0.76 / 3.06 kWh; SoC 58 → 51 % fits. **19.1 % recovered** (≈ 1/3 below 30 km/h, 1/8 above 60), peak regen 46 kW (5 s average; per frame the resolution is 14.4 kW). trip1's 23 % is the same order; its kWh were off because 83 % of frames were lost. Only the low byte is sent, so a trip total needs every frame: a gap over 256 Wh (~20 s at 46 kW) loses whole wraps |
 | 462 | | Charge mode, fast-charge stop request | enum | PSA-RE | "No load" while driving |
 
 ## Traction battery over UDS (BMS diagnostics)
@@ -100,12 +102,17 @@ More reads (bms-abc-1 = 100 % after charging, bms-abc-3 = 70.2 % after 88 km):
 | D86B | Fuse F1 | enum | PSA-RE | good |
 | D47A, D87B / D87C | Insulation total, + side / − side | 4 B kΩ | PSA-RE | 52,782 then 60,000; ± 60,000 kΩ. 60,000 looks like the top of the range |
 | D49C | Mileage as the BMS sees it | 4 B ×1/1024 km | verified | 25,832 / 25,920 km = odometer (`552`) |
-| D4CA | Vehicle time counter (from the BSI) | 4 B ×0.1 s | verified | 1,807,098.8 / 1,835,541.8 s; `552` b0-3 read a moment later: 1,807,227.8 / 1,835,592.8 |
+| D4CA | Vehicle time counter (from the BSI) | 4 B ×0.1 s | verified | 1,807,098.8 / 1,835,541.8 s; `552` b0-3 read a moment later: 1,807,227.8 / 1,835,592.8. trip-20261104: 2,175,571.9, i.e. +94.5 h since Nov 1, about the real time elapsed: it counts while the car sleeps |
 | D445 / D446 | Hottest / coldest module number | 1 B | PSA-RE | 22 / 3 and 0 / 37; temperatures only 2-3 °C apart, so not meaningful here |
 | D89E | Last CAN information fault: type, source | b0 enum, b1-b2 | PSA-RE | `05 06 00`: type 5 = "time elapsed" (a message timeout) from source `0600`. No fault code stored |
 | F18C | ECU serial number | ASCII (15 B reply, PSA-RE says 1 B) | ours | `522165901215` |
 | D416-D419, D41E-D423 | Unnamed, in identical pairs | 4 B uint | ours | 3154/3151/3028/393/379 → +1 or +2 after the drive: **counters** (wake-ups? charges? `D420`/`D422` ≈ 390 fits a charge count over 4.5 years) |
 | E082, D900 | Unnamed | | | 0 |
+
+trip-20261104 (end of the drive, 51 %, 10 °C): no changes worth noting. Cell 90 still the lowest (−15 mV;
+D862/D863 47.27 / 49.16 %, a 1.9 % span), per-cell SoH identical to Nov 1, pack SoH 90.94 %, switches closed and
+not welded, insulation + 59,155 kΩ. D416-D423 counters +1 to +4 again; D420/D422 +1 although no charge happened
+(D465 charge counter only +550), so they are not charge counts.
 
 **Fault codes:** `19 01 09` → 0, `19 02 09` and `19 02 2D` → empty lists, at 100 % and after the drive: no active,
 confirmed or historical fault in the BMS.
@@ -123,8 +130,9 @@ using the full charge as a reference, not wear in 88 km. Pack SoH D860 unchanged
 
 **D465 counters:** about 15 fields change between readings; the SoH history runs (253-274, 309-332) do not. Two
 clear ones, 24-bit big-endian (+ a `00` byte):
-- 148-150: **BMS active time in seconds?** +8,605 over the charge (~2.4 h), +3,551 over the drive (~1 h), +108
-  between bms-abc-2 and -3 (123 s apart). 933,723 s ≈ 259 h total.
+- 148-150: **a time counter in seconds, but not awake time**: +8,605 over the charge (~2.4 h), +3,551 over the
+  Nov 1 drive, +108 between bms-abc-2 and -3 (123 s apart), yet only **+213** from bms-abc-3 to trip-20261104
+  (three days, a 35 min drive and more). Time in some state, balancing being a guess. 933,936 s total.
 - 408-410 / 412-414: **discharge / charge throughput** (unit maybe 0.01 Ah): charge +61 / +9,065, drive +4,521 /
   +748 (regen). Totals 1,460,360 / 1,496,567.
 Others move mostly with charging (124-131, 384-387, 12-15) or with driving (168-171, 388-395).
@@ -234,6 +242,11 @@ clear lane lines, then without, plus a deliberate drift to one side to find the 
 
 ## Not found yet
 
+- **Power windows**: in trip-20261104 all four windows went down, a bit up and fully up (auto) in the first 118 s
+  while parked. No new ID, and no bit or byte on this bus changed in step with them: the only movements in that
+  period are the steering (`305`, `2F5`), brake (`3CD`, `36D`), ESP (`34D`), blower (`3F2` b2) and battery
+  frames. The 12 V voltage (`50D`, 0.05 V steps) stays at 14.65-14.80 V. Windows are handled by the BSI and the
+  door modules on the comfort side, which the OBD port's HS1 bus does not carry.
 - **A/C on/off button**: in trip3 the A/C came on by itself at ready (`3CE`: blower and evaporator setpoint at
   127-128 s). The user then switched it off and the A/C LED went out, but the evaporator kept cooling
   (14.4 → 0.5 °C) until power-off, and no bit on this bus changed cleanly at the right time. The button

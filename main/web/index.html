@@ -49,8 +49,11 @@
   #active-badge[hidden] { display: none; }
 
   #uds[hidden] { display: none; }
-  .uds-group { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-bottom: .5rem; }
-  .uds-group .lbl { width: 100%; }
+  /* One collapsible section per ECU group; collapsed by default so the frame table stays near the top. */
+  .uds-group { margin-bottom: .4rem; }
+  .uds-group summary { cursor: pointer; color: var(--muted); font-size: .85rem; padding: .2rem 0; }
+  .uds-group summary .busy { color: var(--accent); }
+  .uds-group .btns { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin: .3rem 0 .2rem; }
   .uds-group button.run { border-color: var(--accent); color: var(--accent); }
   /* Requests that change the ECU's state (session control). */
   button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
@@ -198,6 +201,13 @@
         <line x1="0" x2="60" y1="20" y2="20"></line><polyline></polyline>
       </svg>
       <div class="sub">last 60 s, regen below the line</div>
+    </div>
+    <div class="tile full" data-conf="ours" title="3A8 energy counters since Reset; checked against the power estimate">
+      <div class="lbl">This trip <button id="trip-reset" style="margin-left:auto;padding:.1rem .5rem;font-size:.8rem">Reset</button></div>
+      <div class="val"><span id="trip-regen">–</span><small>kWh regenerated</small> <small id="trip-pct"></small></div>
+      <div class="sub" id="trip-counters"></div>
+      <div class="sub" id="trip-check"></div>
+      <div class="sub" id="trip-info"></div>
     </div>
     <div class="tile">
       <div class="lbl">Accelerator</div>
@@ -489,6 +499,7 @@ function parseFrames(buf) {
     e.rtr = (idField & 0x8000) !== 0;
   }
   trackPower();
+  trackTrip();
 }
 
 // { v, stale } for a signal key, or null when its frame never arrived.
@@ -555,6 +566,93 @@ function powerKw() {
   return -(a1 - a0) / ((t1 - t0) / 3.6e6) * volts.v / 1000;
 }
 
+// --- Trip energy ---
+// 3A8 carries three 1-byte energy counters that wrap at 256 (trip1): b1 = drawn (only rises), b2 = regenerated
+// (counts DOWN), b0 = net = drawn − regenerated. 1 Wh per step (trip-20261104, complete: 1.05 / 0.99 Wh/step against
+// 563 × 5C3 for net / regen; PSA-RE's 2 Wh is wrong). The panel still integrates 563 Ah × 5C3 V as a check; 563 comes
+// every 1.5 s, so braking shorter than that nets out against driving there.
+
+const TRIP_KEY = "trip";
+const WH_PER_STEP = 1;
+// At full power a counter wraps in ~15 s; a longer gap without 3A8 may hide a whole wrap.
+const TRIP_GAP_MS = 15000;
+// 563 jumped by tens of Ah in single frames (trip3): skip steps no real current could make in one frame.
+const TRIP_MAX_AH_STEP = 1;
+
+function newTrip() {
+  return { started: Date.now(), net: 0, drawn: 0, regen: 0, whOut: 0, whIn: 0, bytes: null, wall: null,
+    ah: null, gaps: 0, odo0: null, odo: null };
+}
+
+function loadTrip() {
+  try {
+    const t = JSON.parse(localStorage.getItem(TRIP_KEY));
+    if (t && t.started) return t;
+  } catch (e) { /* storage unavailable or corrupt: start a new trip */ }
+  return newTrip();
+}
+
+let trip = loadTrip();
+let tripSaved = 0;
+
+function saveTrip(force) {
+  if (!force && Date.now() - tripSaved < 5000) return;
+  tripSaved = Date.now();
+  try { localStorage.setItem(TRIP_KEY, JSON.stringify(trip)); } catch (e) { /* private mode */ }
+}
+
+const wrapDelta = (now, before) => ((now - before + 384) % 256) - 128;  // −128..127
+
+function trackTrip() {
+  const e = frames.get(String(0x3A8));
+  if (e && e.dlc >= 3) {
+    const b = [e.data[0], e.data[1], e.data[2]];
+    const wall = Date.now();
+    if (trip.bytes) {
+      if (wall - trip.wall > TRIP_GAP_MS && b.some((x, i) => x !== trip.bytes[i])) trip.gaps++;
+      trip.net += wrapDelta(b[0], trip.bytes[0]);
+      trip.drawn += Math.max(0, wrapDelta(b[1], trip.bytes[1]));
+      trip.regen += Math.max(0, -wrapDelta(b[2], trip.bytes[2]));
+    }
+    trip.bytes = b;
+    trip.wall = wall;
+  }
+  const a = frames.get(String(SIG.ah.idNum));
+  const volts = value("hv_v");
+  if (a && volts && volts.v != null && !volts.stale) {
+    const ah = decodeRaw(SIG.ah, extract(a.data, SIG.ah.pos, SIG.ah.len), SIG.ah.len);
+    if (ah != null) {
+      const d = trip.ah == null ? 0 : ah - trip.ah;
+      if (Math.abs(d) <= TRIP_MAX_AH_STEP) {
+        if (d < 0) trip.whOut += -d * volts.v;
+        else trip.whIn += d * volts.v;
+      }
+      trip.ah = ah;
+    }
+  }
+  const odo = value("odo");
+  if (odo && odo.v != null && !odo.stale) {
+    if (trip.odo0 == null) trip.odo0 = odo.v;
+    trip.odo = odo.v;
+  }
+  saveTrip(false);
+}
+
+function renderTrip() {
+  const kwh = steps => (steps * WH_PER_STEP / 1000).toFixed(2);
+  setText($("#trip-regen"), trip.bytes ? kwh(trip.regen) : "–");
+  setText($("#trip-pct"), trip.drawn > 0 ? `· ${(trip.regen / trip.drawn * 100).toFixed(0)} % of drawn` : "");
+  setText($("#trip-counters"), trip.bytes
+    ? `Drawn ${kwh(trip.drawn)} · net ${kwh(trip.net)} kWh (3A8)` : "Waiting for 3A8…");
+  setText($("#trip-check"), `Power estimate: drawn ${(trip.whOut / 1000).toFixed(2)} · regen ${(trip.whIn / 1000).toFixed(2)}` +
+    ` · net ${((trip.whOut - trip.whIn) / 1000).toFixed(2)} kWh (563 × 5C3, every 1.5 s: regen is a lower bound)`);
+  const km = trip.odo != null && trip.odo0 != null ? trip.odo - trip.odo0 : null;
+  const perKm = km >= 1 ? ` · ${((trip.whOut - trip.whIn) / km).toFixed(0)} Wh/km` : "";
+  const since = new Date(trip.started).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  setText($("#trip-info"), `Since ${since}` + (km != null ? ` · ${km} km` : "") + perKm +
+    (trip.gaps ? ` · ${trip.gaps} gap(s) > 15 s: counts may be incomplete` : ""));
+}
+
 // --- Rendering ---
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -592,6 +690,7 @@ function renderDrive() {
   const offset = 60 - powerHistory.length;
   const pts = powerHistory.map((v, i) => v == null ? null : `${i + offset},${(20 - v / peak * 19).toFixed(2)}`);
   $("#power-spark polyline").setAttribute("points", pts.filter(Boolean).join(" "));
+  renderTrip();
 }
 
 const cellRects = [];
@@ -882,10 +981,11 @@ const LONG_DIDS = {
   ] },
   0xD465: { n: "D465", decode: v => {
     if (v.length < 151) return [];
-    // b148-150, 24-bit big-endian: +8,605 over a ~2.4 h charge, +3,551 over a ~1 h drive, +108 in 123 s parked
-    // (bms-isotp-1, bms-abc-*), so most likely seconds the BMS has been awake. Not in PSA-RE.
+    // b148-150, 24-bit big-endian, seconds: +8,605 over a ~2.4 h charge, +3,551 over a ~1 h drive, +108 in 123 s
+    // parked, but only +213 over a 35 min drive and three days (trip-20261104). So not awake time; time in some
+    // state (balancing?). Not in PSA-RE.
     const s = (v[148] << 16) | (v[149] << 8) | v[150];
-    return [{ name: "BMS active time (probably)", text: `${(s / 3600).toFixed(1)} h (${s} s)` }];
+    return [{ name: "D465 time counter (meaning unknown)", text: `${(s / 3600).toFixed(1)} h (${s} s)` }];
   } },
 };
 
@@ -1024,9 +1124,9 @@ function onUds(msg) {
   if ((finished || Date.now() - readAll.sentAt > 3000) && !udsBusy()) sendNextRead();
 }
 
-function toggleReadAll(names) {
+function toggleReadAll(names, group) {
   if (readAll) { readAll = null; dirty = true; return; }
-  readAll = { queue: names.slice() };
+  readAll = { queue: names.slice(), group };
   sendNextRead();
   dirty = true;
 }
@@ -1092,19 +1192,25 @@ function renderUds() {
       groups.get(group).push({ ...r, text });
     }
     box.replaceChildren(...[...groups].map(([group, reqs]) => {
-      const g = document.createElement("div");
+      const g = document.createElement("details");
       g.className = "uds-group";
-      const l = document.createElement("div");
-      l.className = "lbl";
-      l.textContent = group;
-      g.append(l);
+      g.dataset.group = group;
+      const sum = document.createElement("summary");
+      const name = document.createElement("span");
+      name.textContent = `${group || "Other"} (${reqs.length})`;
+      const busy = document.createElement("span");
+      busy.className = "busy";
+      sum.append(name, busy);
+      const btns = document.createElement("div");
+      btns.className = "btns";
+      g.append(sum, btns);
       const reads = reqs.filter(r => /_[0-9a-f]{4}$/.test(r.name)).map(r => r.name);
       if (reads.length > 1) {
         const all = document.createElement("button");
         all.className = "run";
-        all.dataset.all = "1";
-        all.onclick = () => toggleReadAll(reads);
-        g.append(all);
+        all.dataset.all = group;
+        all.onclick = () => toggleReadAll(reads, group);
+        btns.append(all);
       }
       // Requests with a parameter (DTC snapshot / extended data) are sent from the fault list instead.
       for (const r of reqs.filter(r => !r.param)) {
@@ -1115,15 +1221,21 @@ function renderUds() {
           b.title = "Changes the ECU's diagnostic session";
         }
         b.onclick = () => send("uds " + r.name);
-        g.append(b);
+        btns.append(b);
       }
       return g;
     }));
   }
+  // A running "Read all" shows in its section's header too, so it stays visible while collapsed.
+  for (const g of $$(".uds-group", box)) {
+    const mine = readAll && readAll.group === g.dataset.group;
+    setText($(".busy", g), mine ? ` · reading, ${readAll.queue.length + 1} left` : "");
+  }
   for (const b of $$("button", box)) {
-    if (b.dataset.all) {
-      setText(b, readAll ? `Stop (${readAll.queue.length + 1} left)` : "Read all");
-      b.disabled = !online;
+    if (b.dataset.all !== undefined) {
+      const mine = readAll && readAll.group === b.dataset.all;
+      setText(b, mine ? `Stop (${readAll.queue.length + 1} left)` : "Read all");
+      b.disabled = !online || (!!readAll && !mine);
     } else {
       b.disabled = !online || udsBusy() || !!readAll;
     }
@@ -1245,6 +1357,13 @@ function connect() {
 function send(text) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(text);
 }
+
+$("#trip-reset").onclick = () => {
+  if (!confirm("Start a new trip?")) return;
+  trip = newTrip();
+  saveTrip(true);
+  dirty = true;
+};
 
 $("#rec").onclick = () => {
   if (!status) return;

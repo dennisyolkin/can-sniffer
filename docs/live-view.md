@@ -62,7 +62,7 @@ Top bar, always visible: connection state, frames/s, **REC switch**, **Mark** bu
 
 | Tab | Content |
 |-----|---------|
-| Drive | Speed, SoC, power estimate (−dAh/dt × V from `563` and `5C3`) with a 60 s sparkline, gear / mode / ready, accelerator, brake pressure, torque, steering angle, camera speed limit, odometer. |
+| Drive | Speed, SoC, power estimate (−dAh/dt × V from `563` and `5C3`) with a 60 s sparkline, **This trip** (energy regenerated / drawn / net from the `3A8` counters with % recovered, the same from `563` × `5C3` as a check, km and Wh/km; kept in localStorage until Reset), gear / mode / ready, accelerator, brake pressure, torque, steering angle, camera speed limit, odometer. |
 | Battery | SoH capacity / resistance, voltage, remaining Ah, min / max cell and spread, 108-cell bar chart, 54 temperatures as a grid, insulation resistance. |
 | Car | Temperatures (outside, inverter, stator, DC/DC, evaporator, battery average), 12 V and DC/DC setpoint, doors (top-view SVG), locks, belts, lights, parking brake. |
 | Raw | Every ID: period, count, bytes; changed bytes flash. Plus logger health (drops, SD buffers, bus errors). |
