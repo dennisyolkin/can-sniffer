@@ -1,4 +1,5 @@
 #include <inttypes.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -17,6 +18,7 @@
 #include "live_data.h"
 #include "sd_logger.h"
 #include "status_led.h"
+#include "trip_energy.h"
 #if CONFIG_CAN_TX_MODE
 #include "uds_client.h"
 #endif
@@ -40,6 +42,8 @@
 #define RX_IDLE_SAMPLES 1000
 
 #define HEARTBEAT_PERIOD_US (1000 * 1000)
+// The trip totals go to events.csv once a minute while recording.
+#define TRIP_LOG_PERIOD_US (60 * 1000 * 1000)
 #define HEARTBEAT_BLINK_MS  50
 
 static const char *TAG = "can_sniffer";
@@ -289,6 +293,8 @@ typedef struct {
     uint32_t sd_dropped_reported;
     twai_error_state_t state_reported;
     uint32_t marks;
+    int64_t trip_logged_us;     // 0 = not yet in this session.
+    unsigned clients_reported;  // UINT_MAX = not yet in this session.
 } session_t;
 
 // ESP_ERR_NO_MEM means a line was dropped while the card was slow; sd_logger counts that. Anything else
@@ -349,6 +355,33 @@ static esp_err_t log_sd_stats(uint64_t timestamp_us, const sd_logger_stats_t *st
     return sd_logger_log_event(timestamp_us, "sd_stats", text);
 }
 
+// "drawn_wh=… regen_wh=… net_wh=… cycles=… gaps=… km=…" (km −1 until the odometer was seen twice).
+static void format_trip(const trip_energy_t *trip, char *text, size_t size) {
+    int32_t km = trip->km_start >= 0 && trip->km_now >= 0 ? trip->km_now - trip->km_start : -1;
+    snprintf(text, size, "drawn_wh=%" PRId32 " regen_wh=%" PRId32 " net_wh=%" PRId32 " cycles=%" PRIu32
+        " gaps=%" PRIu32 " km=%" PRId32, trip->drawn_wh, trip->regen_wh, trip->net_wh, trip->cycles, trip->gaps, km);
+}
+
+// The trip once a minute, and the number of connected pages when it changes (so a capture shows when the page was
+// open, which the page's own numbers depend on).
+static esp_err_t log_trip_events(uint64_t now, session_t *session) {
+    esp_err_t err = ESP_OK;
+    if (session->trip_logged_us == 0 || now - session->trip_logged_us >= TRIP_LOG_PERIOD_US) {
+        trip_energy_t trip;
+        trip_energy_get(&trip);
+        char text[96];
+        format_trip(&trip, text, sizeof(text));
+        err = sd_logger_log_event(now, "trip", text);
+        session->trip_logged_us = now;
+    }
+    unsigned clients = live_data_get_clients();
+    if (sd_alive(err) && clients != session->clients_reported) {
+        err = log_uint_event(now, "ws_clients", clients);
+        session->clients_reported = clients;
+    }
+    return err;
+}
+
 // Once per second while recording. Returns false when the card stopped accepting data.
 static bool log_session_events(uint64_t now, const sd_logger_stats_t *stats, session_t *session) {
     uint32_t dropped = rx_dropped - session->rx_dropped_base;
@@ -366,6 +399,7 @@ static bool log_session_events(uint64_t now, const sd_logger_stats_t *stats, ses
 
     ok = ok && sd_alive(log_bus_errors(now, session));
     ok = ok && sd_alive(log_sd_stats(now, stats, session));
+    ok = ok && sd_alive(log_trip_events(now, session));
     return ok && sd_logger_flush() == ESP_OK;
 }
 
@@ -382,6 +416,7 @@ static esp_err_t start_session(session_t *session, uint32_t rx_idle_low) {
         .rx_dropped_base = rx_dropped,
         .errors_base = read_bus_errors(),
         .state_reported = bus_state,
+        .clients_reported = UINT_MAX,
     };
     strlcpy(session->name, name, sizeof(session->name));
     // Restarts the per-second maxima, so the first sd_stats line covers this session only.
@@ -508,6 +543,7 @@ void app_main(void) {
 
             frames_since_heartbeat++;
             live_data_update(&entry);
+            trip_energy_update(&entry);
             // Returns at once when not recording or after a write failure; the LED and the page report that.
             sd_logger_log_can(&entry);
 #if CONFIG_CAN_TX_MODE
@@ -542,6 +578,18 @@ void app_main(void) {
         bool writable = sd_logger_recording() && !sd_logger_failed();
         log_marks(&session, writable);
 
+        if (live_data_take_trip_reset()) {
+            // The totals that are about to go, so a capture keeps the finished trip.
+            if (writable) {
+                trip_energy_t old;
+                trip_energy_get(&old);
+                char text[96];
+                format_trip(&old, text, sizeof(text));
+                sd_logger_log_event(now, "trip_reset", text);
+            }
+            trip_energy_reset(now);
+        }
+
         sd_logger_stats_t stats = {0};
         if (sd_present) {
             sd_logger_get_stats(&stats);
@@ -569,6 +617,7 @@ void app_main(void) {
             .can_mode = CAN_MODE_NAME,
             .bus_state = bus_state_names[bus_state],
         };
+        trip_energy_get(&status.trip);
         if (sd_logger_recording()) {
             strlcpy(status.session, session.name, sizeof(status.session));
         }

@@ -123,6 +123,7 @@ TWAI ISR (on_rx_done) ──► ring of rx_slot_t + counting semaphores ──�
 | [main/web_server.c](main/web_server.c) / [.h](main/web_server.h) | httpd on core 1: `GET /` serves [main/web/index.html](main/web/index.html) (gzipped at build time), `/ws` pushes the frame table (binary, 5 Hz) and status (JSON, 1 Hz) and takes `rec on`/`rec off`/`mark <label>`. |
 | [main/web/index.html](main/web/index.html) | The page: no frameworks. Its signal table (JSON, PSA-RE bit notation) is the decoding for the live view; check it with `tools/check_page_signals.py`. |
 | [main/uds_client.c](main/uds_client.c) / [.h](main/uds_client.h) | `CONFIG_CAN_TX_MODE` build only (not compiled otherwise): a fixed list of single-frame diagnostic requests sent one at a time from the page, fault codes (`0x19`) and session control (`0x10`, red on the page), reply collection with ISO-TP reassembly (flow control only in answer to a first frame from the ECU just asked; replies up to 512 B), page log and `uds_*` events. See [docs/live-view.md](docs/live-view.md). |
+| [main/trip_energy.c](main/trip_energy.c) / [.h](main/trip_energy.h) | Energy drawn / regenerated / net since power-up or the page's Reset, added up from the car's `3A8` counters on every frame in the logger loop (wrap and drive-cycle reset handling), plus the odometer at the start. Goes out in the status and to `events.csv`. |
 | [main/status_led.c](main/status_led.c) / [.h](main/status_led.h) | WS2812 status LED: `set`, timed `show_for` with a FreeRTOS one-shot timer, a "priority" flag that blocks other updates. |
 
 TWAI uses the **new v6 driver** (`esp_driver_twai`: `esp_twai.h`, `esp_twai_onchip.h`,
@@ -152,7 +153,9 @@ Each recording (REC switched on) creates `/sdcard/can-sniff/<boot id>-<nn>/`: th
   (`write_max_us=… sync_max_us=… buffers_min_free=n/total`, maxima and minimum over that second).
   Counters (`*_dropped_total`, `bus_errors`) start from zero in each session. `mark` lines (`<n> <label>`) come
   from the page's Mark button, stamped with the time of the press, so they can be up to a second out of order.
-  `can_mode` (`listen_only` or `tx`) opens each session; the TX mode build adds `uds_tx`/`uds_rx`/`uds_fc` (frame as
+  `trip` (`drawn_wh=… regen_wh=… net_wh=… cycles=… gaps=… km=…`) once a minute and `trip_reset` (the totals
+  that were cleared), `ws_clients` when the number of connected pages changes. `can_mode` (`listen_only` or `tx`)
+  opens each session; the TX mode build adds `uds_tx`/`uds_rx`/`uds_fc` (frame as
   `ID#DATA`), `uds_msg` (complete multi-frame reply as hex), `uds_rx_error`, `uds_done`, `uds_tx_failed` and
   `uds_refused`.
 

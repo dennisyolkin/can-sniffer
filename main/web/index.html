@@ -202,11 +202,10 @@
       </svg>
       <div class="sub">last 60 s, regen below the line</div>
     </div>
-    <div class="tile full" data-conf="ours" title="3A8 energy counters since Reset; checked against the power estimate">
+    <div class="tile full" data-conf="verified" title="Counted on the board from 3A8, frame by frame, since Reset or power-up">
       <div class="lbl">This trip <button id="trip-reset" style="margin-left:auto;padding:.1rem .5rem;font-size:.8rem">Reset</button></div>
       <div class="val"><span id="trip-regen">–</span><small>kWh regenerated</small> <small id="trip-pct"></small></div>
       <div class="sub" id="trip-counters"></div>
-      <div class="sub" id="trip-check"></div>
       <div class="sub" id="trip-info"></div>
     </div>
     <div class="tile">
@@ -499,7 +498,6 @@ function parseFrames(buf) {
     e.rtr = (idField & 0x8000) !== 0;
   }
   trackPower();
-  trackTrip();
 }
 
 // { v, stale } for a signal key, or null when its frame never arrived.
@@ -567,90 +565,31 @@ function powerKw() {
 }
 
 // --- Trip energy ---
-// 3A8 carries three 1-byte energy counters that wrap at 256 (trip1): b1 = drawn (only rises), b2 = regenerated
-// (counts DOWN), b0 = net = drawn − regenerated. 1 Wh per step (trip-20261104, complete: 1.05 / 0.99 Wh/step against
-// 563 × 5C3 for net / regen; PSA-RE's 2 Wh is wrong). The panel still integrates 563 Ah × 5C3 V as a check; 563 comes
-// every 1.5 s, so braking shorter than that nets out against driving there.
-
-const TRIP_KEY = "trip";
-const WH_PER_STEP = 1;
-// At full power a counter wraps in ~15 s; a longer gap without 3A8 may hide a whole wrap.
-const TRIP_GAP_MS = 15000;
-// 563 jumped by tens of Ah in single frames (trip3): skip steps no real current could make in one frame.
-const TRIP_MAX_AH_STEP = 1;
-
-function newTrip() {
-  return { started: Date.now(), net: 0, drawn: 0, regen: 0, whOut: 0, whIn: 0, bytes: null, wall: null,
-    ah: null, gaps: 0, odo0: null, odo: null };
-}
-
-function loadTrip() {
-  try {
-    const t = JSON.parse(localStorage.getItem(TRIP_KEY));
-    if (t && t.started) return t;
-  } catch (e) { /* storage unavailable or corrupt: start a new trip */ }
-  return newTrip();
-}
-
-let trip = loadTrip();
-let tripSaved = 0;
-
-function saveTrip(force) {
-  if (!force && Date.now() - tripSaved < 5000) return;
-  tripSaved = Date.now();
-  try { localStorage.setItem(TRIP_KEY, JSON.stringify(trip)); } catch (e) { /* private mode */ }
-}
-
-const wrapDelta = (now, before) => ((now - before + 384) % 256) - 128;  // −128..127
-
-function trackTrip() {
-  const e = frames.get(String(0x3A8));
-  if (e && e.dlc >= 3) {
-    const b = [e.data[0], e.data[1], e.data[2]];
-    const wall = Date.now();
-    if (trip.bytes) {
-      if (wall - trip.wall > TRIP_GAP_MS && b.some((x, i) => x !== trip.bytes[i])) trip.gaps++;
-      trip.net += wrapDelta(b[0], trip.bytes[0]);
-      trip.drawn += Math.max(0, wrapDelta(b[1], trip.bytes[1]));
-      trip.regen += Math.max(0, -wrapDelta(b[2], trip.bytes[2]));
-    }
-    trip.bytes = b;
-    trip.wall = wall;
-  }
-  const a = frames.get(String(SIG.ah.idNum));
-  const volts = value("hv_v");
-  if (a && volts && volts.v != null && !volts.stale) {
-    const ah = decodeRaw(SIG.ah, extract(a.data, SIG.ah.pos, SIG.ah.len), SIG.ah.len);
-    if (ah != null) {
-      const d = trip.ah == null ? 0 : ah - trip.ah;
-      if (Math.abs(d) <= TRIP_MAX_AH_STEP) {
-        if (d < 0) trip.whOut += -d * volts.v;
-        else trip.whIn += d * volts.v;
-      }
-      trip.ah = ah;
-    }
-  }
-  const odo = value("odo");
-  if (odo && odo.v != null && !odo.stale) {
-    if (trip.odo0 == null) trip.odo0 = odo.v;
-    trip.odo = odo.v;
-  }
-  saveTrip(false);
-}
+// Counted on the board (main/trip_energy.c) from the car's 3A8 energy counters, so it is complete whether or not a
+// page was open: the counters only carry their low byte, and a phone that sleeps would lose whole 256 Wh wraps.
+// The board's trip runs from power-up or the last Reset, across the car's own drive cycles.
 
 function renderTrip() {
-  const kwh = steps => (steps * WH_PER_STEP / 1000).toFixed(2);
-  setText($("#trip-regen"), trip.bytes ? kwh(trip.regen) : "–");
-  setText($("#trip-pct"), trip.drawn > 0 ? `· ${(trip.regen / trip.drawn * 100).toFixed(0)} % of drawn` : "");
-  setText($("#trip-counters"), trip.bytes
-    ? `Drawn ${kwh(trip.drawn)} · net ${kwh(trip.net)} kWh (3A8)` : "Waiting for 3A8…");
-  setText($("#trip-check"), `Power estimate: drawn ${(trip.whOut / 1000).toFixed(2)} · regen ${(trip.whIn / 1000).toFixed(2)}` +
-    ` · net ${((trip.whOut - trip.whIn) / 1000).toFixed(2)} kWh (563 × 5C3, every 1.5 s: regen is a lower bound)`);
-  const km = trip.odo != null && trip.odo0 != null ? trip.odo - trip.odo0 : null;
-  const perKm = km >= 1 ? ` · ${((trip.whOut - trip.whIn) / km).toFixed(0)} Wh/km` : "";
-  const since = new Date(trip.started).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  setText($("#trip-info"), `Since ${since}` + (km != null ? ` · ${km} km` : "") + perKm +
-    (trip.gaps ? ` · ${trip.gaps} gap(s) > 15 s: counts may be incomplete` : ""));
+  const t = status && status.trip;
+  const kwh = wh => (wh / 1000).toFixed(2);
+  setText($("#trip-regen"), t ? kwh(t.regen_wh) : "–");
+  setText($("#trip-pct"), t && t.drawn_wh > 0 ? `· ${(t.regen_wh / t.drawn_wh * 100).toFixed(0)} % of drawn` : "");
+  setText($("#trip-counters"), t ? `Drawn ${kwh(t.drawn_wh)} · net ${kwh(t.net_wh)} kWh` : "Waiting for the board…");
+  if (!t) {
+    setText($("#trip-info"), "");
+    return;
+  }
+  const km = t.km_start >= 0 && t.km_now >= 0 ? t.km_now - t.km_start : null;
+  const minutes = Math.max(0, (status.uptime_ms - t.since_ms) / 60000);
+  const since = t.since_ms === 0 ? "board power-up" : "Reset";
+  setText($("#trip-info"), `${fmtDuration(minutes)} since ${since}` + (km != null ? ` · ${km} km` : "") +
+    (km >= 1 ? ` · ${(t.net_wh / km).toFixed(0)} Wh/km` : "") +
+    (t.cycles ? ` · ${t.cycles} drive cycle${t.cycles === 1 ? "" : "s"}` : "") +
+    (t.gaps ? ` · ${t.gaps} gap(s): counts may be incomplete` : ""));
+}
+
+function fmtDuration(minutes) {
+  return minutes < 60 ? `${minutes.toFixed(0)} min` : `${Math.floor(minutes / 60)} h ${String(Math.round(minutes % 60)).padStart(2, "0")} min`;
 }
 
 // --- Rendering ---
@@ -1359,10 +1298,7 @@ function send(text) {
 }
 
 $("#trip-reset").onclick = () => {
-  if (!confirm("Start a new trip?")) return;
-  trip = newTrip();
-  saveTrip(true);
-  dirty = true;
+  if (confirm("Start a new trip? The board's totals go back to zero.")) send("trip reset");
 };
 
 $("#rec").onclick = () => {

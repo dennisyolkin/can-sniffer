@@ -35,6 +35,8 @@ static uint8_t slot_of[STANDARD_ID_COUNT];
 
 static live_status_t status;
 static int recording_request = -1;  // -1: none, otherwise the requested state.
+static bool trip_reset_request;
+static unsigned clients;
 static QueueHandle_t marks;
 
 static const muxed_id_t *find_muxed(uint16_t id) {
@@ -120,6 +122,33 @@ bool live_data_take_recording_request(bool *on) {
     }
     *on = request == 1;
     return true;
+}
+
+bool live_data_take_trip_reset(void) {
+    taskENTER_CRITICAL(&lock);
+    bool request = trip_reset_request;
+    trip_reset_request = false;
+    taskEXIT_CRITICAL(&lock);
+    return request;
+}
+
+unsigned live_data_get_clients(void) {
+    taskENTER_CRITICAL(&lock);
+    unsigned count = clients;
+    taskEXIT_CRITICAL(&lock);
+    return count;
+}
+
+void live_data_request_trip_reset(void) {
+    taskENTER_CRITICAL(&lock);
+    trip_reset_request = true;
+    taskEXIT_CRITICAL(&lock);
+}
+
+void live_data_set_clients(unsigned count) {
+    taskENTER_CRITICAL(&lock);
+    clients = count;
+    taskEXIT_CRITICAL(&lock);
 }
 
 bool live_data_take_mark(live_mark_t *mark) {

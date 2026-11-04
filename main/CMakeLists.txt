@@ -5,6 +5,7 @@ set(srcs
     "live_data.c"
     "wifi_ap.c"
     "web_server.c"
+    "trip_energy.c"
 )
 # Only the test build can transmit; the car image does not even contain the code.
 if(CONFIG_CAN_TX_MODE)

@@ -45,11 +45,12 @@ Server → page:
   `fps`, `frames`, `rx_dropped`, `bus_errors`, `bus_errors_per_s`, `rec` (`no_card`/`off`/`on`/`failed`),
   `session`, `sd_dropped`, `buffers_free`, `buffers`, `marks`, `can_mode` (`listen_only`/`tx`; drives the
   TX badge), `bus_state` (TWAI error state, only meaningful in `tx` mode), `clients`, `heap_free`,
-  `heap_min`.
+  `heap_min`, and `trip` = `{drawn_wh, regen_wh, net_wh, cycles, gaps, since_ms, km_start, km_now}` (`since_ms` =
+  board uptime at the last Reset, 0 = since power-up; km −1 until the odometer is seen).
 - **Text, TX mode only:** `{"type":"uds","requests":[…],"log":[…]}` when the request log changes and when a page
   connects (see "Transmitting" below).
 
-Page → server (text): `rec on`, `rec off`, `mark <label>` (label up to 31 chars; commas, quotes and control
+Page → server (text): `rec on`, `rec off`, `trip reset`, `mark <label>` (label up to 31 chars; commas, quotes and control
 characters are replaced), and in TX mode `uds <name>` (ignored while a request is in flight). Longer than 64
 bytes closes the connection.
 
@@ -62,7 +63,7 @@ Top bar, always visible: connection state, frames/s, **REC switch**, **Mark** bu
 
 | Tab | Content |
 |-----|---------|
-| Drive | Speed, SoC, power estimate (−dAh/dt × V from `563` and `5C3`) with a 60 s sparkline, **This trip** (energy regenerated / drawn / net from the `3A8` counters with % recovered, the same from `563` × `5C3` as a check, km and Wh/km; kept in localStorage until Reset), gear / mode / ready, accelerator, brake pressure, torque, steering angle, camera speed limit, odometer. |
+| Drive | Speed, SoC, power estimate (−dAh/dt × V from `563` and `5C3`) with a 60 s sparkline, **This trip** (energy regenerated / drawn / net with % recovered, km, Wh/km, drive cycles; counted on the board by `trip_energy.c` from the `3A8` counters, so it is complete while the phone sleeps; from power-up or Reset), gear / mode / ready, accelerator, brake pressure, torque, steering angle, camera speed limit, odometer. |
 | Battery | SoH capacity / resistance, voltage, remaining Ah, min / max cell and spread, 108-cell bar chart, 54 temperatures as a grid, insulation resistance. |
 | Car | Temperatures (outside, inverter, stator, DC/DC, evaporator, battery average), 12 V and DC/DC setpoint, doors (top-view SVG), locks, belts, lights, parking brake. |
 | Raw | Every ID: period, count, bytes; changed bytes flash. Plus logger health (drops, SD buffers, bus errors). |

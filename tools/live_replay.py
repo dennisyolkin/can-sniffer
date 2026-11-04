@@ -51,6 +51,33 @@ class Replay:
         self.session = ""
         self.marks = 0
         self.sessions = 0
+        self.new_trip(0)
+        self.trip_last = None
+
+    # Same counting as main/trip_energy.c, so the page's "This trip" panel can be tried without the car.
+    def new_trip(self, since_ms: int) -> None:
+        km = getattr(self, "trip", {}).get("km_now", -1)
+        self.trip = {"drawn_wh": 0, "regen_wh": 0, "net_wh": 0, "cycles": 0, "gaps": 0, "since_ms": since_ms,
+                     "km_start": km, "km_now": km}
+
+    def count_trip(self, can_id: int, data: bytes) -> None:
+        wrap = lambda now, before: (now - before + 384) % 256 - 128
+        if can_id == 0x3A8:
+            b = tuple(data[:3])
+            if self.trip_last is not None and b != self.trip_last:
+                if b == (0, 0, 254):
+                    self.trip["cycles"] += 1
+                else:
+                    self.trip["net_wh"] += wrap(b[0], self.trip_last[0])
+                    self.trip["drawn_wh"] += max(0, wrap(b[1], self.trip_last[1]))
+                    self.trip["regen_wh"] += max(0, -wrap(b[2], self.trip_last[2]))
+            self.trip_last = b
+        elif can_id == 0x552:
+            km = (data[4] << 16) | (data[5] << 8) | data[6]
+            if km != 0xFFFFFF:
+                self.trip["km_now"] = km
+                if self.trip["km_start"] < 0:
+                    self.trip["km_start"] = km
 
     def now_us(self) -> int:
         return self.origin_us + int((time.monotonic() - self.wall0) * self.speed * 1e6)
@@ -69,6 +96,7 @@ class Replay:
             entry[3] += 1
             entry[4] = int(self.t[i] // 1000) & 0xFFFFFFFF
             entry[5] = data
+            self.count_trip(can_id, data)
         self.fps_count += end - self.pos
         self.frames_total += end - self.pos
         self.pos = end
@@ -91,7 +119,7 @@ class Replay:
             "type": "status", "uptime_ms": now_us // 1000, "fps": self.fps, "frames": self.frames_total,
             "rx_dropped": 0, "bus_errors": 0, "bus_errors_per_s": 0, "rec": self.rec, "session": self.session,
             "sd_dropped": 0, "buffers_free": 7, "buffers": 8, "marks": self.marks,
-            "can_mode": "listen_only", "bus_state": "error_passive", "clients": clients,
+            "can_mode": "listen_only", "bus_state": "error_passive", "trip": self.trip, "clients": clients,
             "heap_free": 120_000, "heap_min": 100_000,
         })
 
@@ -103,6 +131,8 @@ class Replay:
             self.rec, self.session = "off", ""
         elif text.startswith("mark ") and self.rec == "on":
             self.marks += 1
+        elif text == "trip reset":
+            self.new_trip(self.now_us() // 1000)
         t_s = self.now_us() / 1e6
         print(f"{t_s:9.1f} s  command: {text}", flush=True)
 

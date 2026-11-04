@@ -6,6 +6,7 @@
 #include "esp_err.h"
 
 #include "sd_logger.h"
+#include "trip_energy.h"
 
 #define LIVE_DATA_MARK_LABEL_MAX 32
 
@@ -47,6 +48,7 @@ typedef struct {
     uint32_t marks;  // Marks written in this session.
     const char *can_mode;   // "listen_only" or "tx"; static string.
     const char *bus_state;  // TWAI error state name; static string.
+    trip_energy_t trip;
 } live_status_t;
 
 typedef struct {
@@ -62,6 +64,9 @@ void live_data_set_status(const live_status_t *status);
 // Return true when the web page asked for something since the last call.
 bool live_data_take_recording_request(bool *on);
 bool live_data_take_mark(live_mark_t *mark);
+bool live_data_take_trip_reset(void);
+// Pages connected over the WebSocket, as last reported by the web server.
+unsigned live_data_get_clients(void);
 
 // Web server side.
 // Copies up to `max` entries; returns how many there are.
@@ -70,3 +75,5 @@ void live_data_get_status(live_status_t *status);
 void live_data_request_recording(bool on);
 // ESP_ERR_NO_MEM when marks arrive faster than the logger loop takes them (it does once per second).
 esp_err_t live_data_add_mark(const char *label);
+void live_data_request_trip_reset(void);
+void live_data_set_clients(unsigned count);

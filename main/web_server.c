@@ -28,7 +28,7 @@
 #define FRAMES_HEADER_LEN 8
 #define FRAMES_MAGIC 'F'
 #define FRAMES_VERSION 1
-#define STATUS_JSON_MAX 512
+#define STATUS_JSON_MAX 768
 // Request list (about 90 characters per request, ~65 requests), UDS_CLIENT_LOG_LEN entries of about 110 characters
 // each, and the latest multi-frame message as hex (2 characters per byte).
 #define UDS_JSON_MAX (8192 + 2 * UDS_CLIENT_MSG_MAX)
@@ -135,11 +135,14 @@ static size_t build_status(size_t clients) {
         ",\"rx_dropped\":%" PRIu32 ",\"bus_errors\":%" PRIu32 ",\"bus_errors_per_s\":%" PRIu32
         ",\"rec\":\"%s\",\"session\":\"%s\",\"sd_dropped\":%" PRIu32 ",\"buffers_free\":%" PRIu32
         ",\"buffers\":%" PRIu32 ",\"marks\":%" PRIu32 ",\"can_mode\":\"%s\",\"bus_state\":\"%s\""
+        ",\"trip\":{\"drawn_wh\":%" PRId32 ",\"regen_wh\":%" PRId32 ",\"net_wh\":%" PRId32 ",\"cycles\":%" PRIu32
+        ",\"gaps\":%" PRIu32 ",\"since_ms\":%" PRIu32 ",\"km_start\":%" PRId32 ",\"km_now\":%" PRId32 "}"
         ",\"clients\":%u,\"heap_free\":%u,\"heap_min\":%u}",
         (uint32_t) (esp_timer_get_time() / 1000), s.frames_per_s, s.frames_total, s.rx_dropped_total,
         s.bus_errors_total, s.bus_errors_per_s, recorder_names[s.recorder], s.session, s.sd_dropped,
         s.buffers_min_free, s.buffer_count, s.marks, s.can_mode ? s.can_mode : "",
-        s.bus_state ? s.bus_state : "", (unsigned) clients,
+        s.bus_state ? s.bus_state : "", s.trip.drawn_wh, s.trip.regen_wh, s.trip.net_wh, s.trip.cycles, s.trip.gaps,
+        (uint32_t) (s.trip.started_us / 1000), s.trip.km_start, s.trip.km_now, (unsigned) clients,
         (unsigned) heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
         (unsigned) heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT));
     return len > 0 && len < (int) sizeof(status_buf) ? (size_t) len : 0;
@@ -257,6 +260,7 @@ static void push(void *arg) {
     }
     memcpy(known_fds, fds, ws_count * sizeof(fds[0]));
     known_count = ws_count;
+    live_data_set_clients(ws_count);
     if (ws_count == 0) {
         return;
     }
@@ -337,6 +341,8 @@ static void handle_command(const char *text) {
         live_data_request_recording(true);
     } else if (strcmp(text, "rec off") == 0) {
         live_data_request_recording(false);
+    } else if (strcmp(text, "trip reset") == 0) {
+        live_data_request_trip_reset();
 #if CONFIG_CAN_TX_MODE
     } else if (strncmp(text, "uds ", 4) == 0) {
         handle_uds_command(text + 4);
