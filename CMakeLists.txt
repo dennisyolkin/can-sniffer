@@ -12,10 +12,10 @@ foreach(name sdkconfig.defaults sdkconfig.secrets)
         list(APPEND defaults_files "${name}")
     endif()
 endforeach()
-# TX mode test build (CONFIG_CAN_TX_MODE), kept apart from the car image:
-#   idf.py -B build-tx -D SDKCONFIG=build-tx/sdkconfig -D CAN_TX_BUILD=1 build
-if(CAN_TX_BUILD)
-    list(APPEND defaults_files "sdkconfig.tx")
+# TX mode (CONFIG_CAN_TX_MODE) is the default. A listen-only image, kept apart from the normal build:
+#   idf.py -B build-listen -D SDKCONFIG=build-listen/sdkconfig -D LISTEN_ONLY_BUILD=1 build
+if(LISTEN_ONLY_BUILD)
+    list(APPEND defaults_files "sdkconfig.listen_only")
 endif()
 set(SDKCONFIG_DEFAULTS "${defaults_files}")
 

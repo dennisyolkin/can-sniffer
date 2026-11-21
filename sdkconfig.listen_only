@@ -1,0 +1,2 @@
+# Extra defaults for a listen-only image (see CMakeLists.txt): the node sends nothing, not even ACKs.
+CONFIG_CAN_TX_MODE=n

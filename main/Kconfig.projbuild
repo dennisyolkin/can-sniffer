@@ -34,17 +34,19 @@ endmenu
 menu "CAN bus"
 
     config CAN_TX_MODE
-        bool "TX mode: take part in the car's bus and send diagnostic requests (test build only)"
-        default n
+        bool "TX mode: take part in the car's bus and send diagnostic requests"
+        default y
         help
-            Off (the car image): listen-only. TX is never routed to the TWAI controller; the node sends nothing,
-            not even ACKs.
+            On by default (the user's choice, 2026-11-21). Off: listen-only. TX is never routed to the TWAI
+            controller; the node sends nothing, not even ACKs (build with -D LISTEN_ONLY_BUILD=1, see
+            CMakeLists.txt).
 
             On: normal mode. The node ACKs every frame, sends error frames when it sees a bus error, and the page
             gets buttons for a fixed list of read-only, single-frame diagnostic requests (uds_client.c, allowlisted
-            to UDS 0x3E/0x22 and OBD-II mode 01). Replies are shown on the page and logged to events.csv; the node
+            to UDS 0x3E/0x22/0x19, 0x10 default/extended and OBD-II mode 01). Nothing is sent unless a button on
+            the page asks for it. Replies are shown on the page and logged to events.csv; the node
             receives its own requests back (loopback), so they also appear in can.log.
 
-            Use it only for deliberate tests (parked, ignition on), and stop if bus errors appear.
+            Send requests parked (Ready on), and stop if bus errors appear.
 
 endmenu

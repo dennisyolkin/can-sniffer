@@ -1,8 +1,9 @@
 # Live view on the phone (phase 1b)
 
 Goal: the board runs a Wi-Fi access point and serves a small web page that shows decoded car data in real time.
-Recording the full log to SD becomes optional: a switch on the page, **off at every boot**. Still passive:
-listen-only, nothing is sent on the bus.
+Recording the full log to SD becomes optional: a switch on the page, **off at every boot**. Planned as passive
+(listen-only); since 2026-11-21 the default image is TX mode (see "Transmitting"), which ACKs every frame and sends
+only what the page's buttons ask for.
 
 ## Decisions
 
@@ -90,15 +91,16 @@ To check on the car:
 - Marks appear in `events.csv`; the power estimate looks sane against the dashboard (accelerating vs regen).
 - Booting without an SD card: live view works, the page shows "No SD".
 
-## Transmitting (test builds only)
+## Transmitting (TX mode, the default)
 
 Leaving listen-only makes the node ACK every frame, so it is a bus participant even when it sends nothing. That is
 a build option, not a runtime switch:
 
-- Listen-only (default, the car image): the node sends nothing, not even ACKs.
-- `CONFIG_CAN_TX_MODE` (build `build-tx`): normal TWAI mode, the node ACKs every frame, and `uds_client` adds a
+- `CONFIG_CAN_TX_MODE` (**default since 2026-11-21**, `-B build`): normal TWAI mode, the node ACKs every frame, and `uds_client` adds a
   "Diagnostics" block to the Raw tab with one button per predefined request; there is no free-form send box.
-  Header badge "TX".
+  Header badge "TX". Nothing is sent unless a button asks for it.
+- Listen-only (`-D LISTEN_ONLY_BUILD=1`, build `build-listen`; the default until 2026-11-21): the node sends nothing,
+  not even ACKs.
 
 History: an ACK-only build (normal mode, nothing sent) was tested in the car on 2026-10-20: no warnings, no bus
 errors, ~1.5k frames/s as usual. It was later merged into TX mode.
