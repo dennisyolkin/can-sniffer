@@ -12,6 +12,8 @@
 // Long enough for an ECU to answer (UDS P2 is 50 ms, plus "response pending") and for every ECU to answer a
 // functional OBD-II request.
 #define REPLY_WINDOW_US (1000 * 1000)
+// A scan step only needs TesterPresent's answer: UDS gives an ECU 50 ms (P2); the slowest so far took 21 ms.
+#define SCAN_WINDOW_US (250 * 1000)
 // The ESP32 controller only has single-shot or endless retransmission (twai_hal_v1.c), so a request that loses
 // arbitration is retried here, a bounded number of times. Car ECUs send in bursts on their 10 ms ticks, and our
 // diagnostic IDs lose to all of them: back-to-back retries (tx-logs-2) all landed in the same burst.
@@ -134,6 +136,77 @@ static const uds_request_t requests[] = {
 };
 #define REQUEST_COUNT (sizeof(requests) / sizeof(requests[0]))
 
+// Every diagnostic address pair PSA-RE lists for AEE2010.ev (generated from diag/AEE2010.ev/*/*/ecu.yml), what the
+// scan tries. Left out: the power tailgate (76B -> 66B), because 66B is in the car's own traffic. Some are for other
+// variants (urea, gearbox, engine) and simply stay silent. None of the others appear in the captures so far.
+static const uds_ecu_t ecus[] = {
+    {"LVNSD", "Low voltage network separation device", 0x49B, 0x49A},
+    {"ESM", "Electronic shifter module", 0x58B, 0x58A},
+    {"OBC", "On-board charger / DC-DC", 0x590, 0x58F},
+    {"LED_DRIVER", "LED headlamp driver", 0x597, 0x557},
+    {"BVN", "Night vision", 0x5AC, 0x58C},
+    {"AVAS", "Pedestrian warning sound generator", 0x5B0, 0x5AF},
+    {"LED_DRIVER", "LED headlamp driver", 0x5B7, 0x577},
+    {"EPLU", "Electric park lock", 0x5CA, 0x5AA},
+    {"EBB", "Electric brake booster", 0x5D0, 0x5CF},
+    {"EDP_C", "Driver door module", 0x620, 0x504},
+    {"SCR", "Urea injection (SCR) control unit", 0x6A1, 0x681},
+    {"VCU", "Vehicle control unit", 0x6A2, 0x682},
+    {"CMEL", "Electric motor control unit", 0x6A6, 0x686},
+    {"RMCU", "Rear electric motor control unit", 0x6A7, 0x687},
+    {"CMM", "Engine control unit", 0x6A8, 0x688},
+    {"BVA", "Gearbox control unit", 0x6A9, 0x689},
+    {"SBW", "Shift-by-wire gear selector", 0x6AA, 0x68A},
+    {"ABS", "ABS/ESP brake control unit", 0x6AD, 0x68D},
+    {"CSS", "Suspension control unit", 0x6B0, 0x690},
+    {"TBMU", "Traction battery management", 0x6B4, 0x694},
+    {"DAE", "Electric power steering", 0x6B5, 0x695},
+    {"ARTIV", "Front radar (distance alert / ACC / AEB)", 0x6B6, 0x696},
+    {"AFS/OLVI", "Directional / adaptive headlamps", 0x6B7, 0x697},
+    {"LVNSD", "Low voltage network separation device", 0x6BA, 0x69A},
+    {"DMTR", "Network voltage stabiliser", 0x6BC, 0x69C},
+    {"ASR", "Grip Control traction module (ASR+)", 0x6BD, 0x69D},
+    {"BECB", "Battery state sensor", 0x6C4, 0x604},
+    {"HDC", "Steering column switch module", 0x6C8, 0x628},
+    {"SIR", "Alarm siren", 0x6E5, 0x625},
+    {"MUS", "Ultrasonic intrusion module", 0x6E6, 0x626},
+    {"CDPL/ESV/TNB", "Rain and light sensor", 0x730, 0x710},
+    {"ADDGO/BECH/CTPE", "Diesel additive (FAP) pump", 0x731, 0x711},
+    {"BAAS/CCE/FEU_AR", "Hands-free tailgate kick sensor", 0x732, 0x712},
+    {"AVP/BDM_C/BPL/B", "Surround view camera", 0x733, 0x713},
+    {"CLIM_AV/CRT/EMF", "Climate control", 0x736, 0x716},
+    {"CCE", "Electric A/C compressor", 0x737, 0x717},
+    {"VTH", "Head-up display", 0x738, 0x718},
+    {"BML", "Keyless entry and start module", 0x741, 0x641},
+    {"HDC", "Steering column switch module", 0x742, 0x642},
+    {"EMF", "Multifunction display", 0x743, 0x643},
+    {"RBG", "Airbag control unit", 0x744, 0x644},
+    {"BSG", "Generic body control module", 0x748, 0x648},
+    {"CVM", "Multifunction windscreen camera", 0x74A, 0x64A},
+    {"EDP_C", "Driver door module", 0x74B, 0x64B},
+    {"CRT", "Telematics remote control", 0x74C, 0x64C},
+    {"AVE/AVP", "Electric steering lock / Surround view camera", 0x74F, 0x64F},
+    {"BSI", "Body control module / main gateway", 0x752, 0x652},
+    {"MDPLC", "Sliding side door module", 0x755, 0x655},
+    {"MDPLC_D", "Right sliding side door module", 0x756, 0x656},
+    {"AAS", "Parking sensors", 0x75D, 0x65D},
+    {"CMB", "Instrument cluster", 0x75F, 0x65F},
+    {"RAD", "Radio", 0x760, 0x660},
+    {"IVC_D", "Driver monitoring camera", 0x761, 0x661},
+    {"BTA/BTEL", "Standalone telematics unit", 0x764, 0x664},
+    {"BSR", "Trailer control module", 0x76C, 0x66C},
+    {"CLIM_AV", "Climate control", 0x76D, 0x66D},
+    {"VTH", "Head-up display", 0x770, 0x670},
+    {"CDC", "CD changer", 0x771, 0x671},
+    {"AVP", "Surround view camera", 0x773, 0x673},
+    {"CLIM_AR", "Rear climate control", 0x778, 0x678},
+    {"FMUX", "Centre console multiplexed controls", 0x77B, 0x67B},
+    {"BTA/MDS", "Standalone telematics unit", 0x77C, 0x67C},
+    {"AMPLI", "Audio amplifier", 0x77D, 0x67D},
+};
+#define ECU_COUNT (sizeof(ecus) / sizeof(ecus[0]))
+_Static_assert(ECU_COUNT <= UDS_CLIENT_ECU_MAX, "raise UDS_CLIENT_ECU_MAX");
+
 typedef enum {
     STATE_IDLE,
     STATE_SENDING,  // Waiting for on_tx_done.
@@ -168,8 +241,20 @@ static state_t state;
 static const uds_request_t *current;
 static unsigned attempts;
 static unsigned replies;
+static uint8_t last_reply_service;  // Service byte of the latest single-frame reply (7E, 7F, …).
+static bool tx_failed;
 static bool final_reply;
 static int64_t window_end_us;
+static int64_t reply_window_us = REPLY_WINDOW_US;
+
+// ECU scan. Requests from the web server go through atomics; the rest is logger loop only, except the results,
+// which the web server copies under the log lock.
+static atomic_bool scan_start_requested;
+static atomic_bool scan_stop_requested;
+static bool scanning;
+static size_t scan_next;
+static char scan_results[ECU_COUNT + 1];
+static uds_request_t scan_request;
 static int64_t retry_at_us;
 static tx_kind_t tx_kind;
 static uint16_t tx_id;
@@ -228,7 +313,7 @@ static void add_log(uds_log_kind_t kind, uint32_t t_ms, uint16_t id, uint16_t le
     uds_log_entry_t entry = {
         .t_ms = t_ms,
         .kind = kind,
-        .request = (uint8_t) (current - requests),
+        .request = current == &scan_request ? UDS_CLIENT_SCAN_REQUEST : (uint8_t) (current - requests),
         .id = id,
         .len = len,
     };
@@ -264,15 +349,59 @@ static void log_text_event(uint64_t timestamp_us, const char *event, const char 
     (void) sd_logger_log_event(timestamp_us, event, text);
 }
 
-static void finish(void) {
+static void scan_step_done(uint64_t now_us) {
+    char result = UDS_SCAN_SILENT;
+    if (tx_failed) {
+        result = UDS_SCAN_NOT_SENT;
+    } else if (replies > 0) {
+        result = last_reply_service == UDS_NRC ? UDS_SCAN_NEGATIVE : UDS_SCAN_ANSWERED;
+    }
+    static const char *const names[] = {
+        [UDS_SCAN_ANSWERED] = "answered", [UDS_SCAN_NEGATIVE] = "negative", [UDS_SCAN_SILENT] = "silent",
+        [UDS_SCAN_NOT_SENT] = "not_sent",
+    };
+    char text[48];
+    snprintf(text, sizeof(text), "%s %03X %s", ecus[scan_next].node, ecus[scan_next].tx_id, names[(int) result]);
+    (void) sd_logger_log_event(now_us, "scan_result", text);
+    taskENTER_CRITICAL(&lock);
+    scan_results[scan_next] = result;
+    log_seq++;
+    taskEXIT_CRITICAL(&lock);
+    scan_next++;
+}
+
+static void scan_end(uint64_t now_us, const char *why) {
+    unsigned answered = 0;
+    for (size_t i = 0; i < ECU_COUNT; i++) {
+        answered += scan_results[i] == UDS_SCAN_ANSWERED || scan_results[i] == UDS_SCAN_NEGATIVE;
+    }
+    char text[48];
+    snprintf(text, sizeof(text), "%s %u/%u answered", why, answered, (unsigned) scan_next);
+    (void) sd_logger_log_event(now_us, "scan_done", text);
+    taskENTER_CRITICAL(&lock);
+    scanning = false;
+    log_seq++;
+    taskEXIT_CRITICAL(&lock);
+}
+
+static void finish(uint64_t now_us) {
     state = STATE_IDLE;
-    atomic_store(&busy, false);
+    if (current == &scan_request) {
+        scan_step_done(now_us);
+        if (scan_next >= ECU_COUNT) {
+            scan_end(now_us, "complete");
+        }
+    }
+    if (!scanning) {
+        atomic_store(&busy, false);
+    }
 }
 
 static void fail(int64_t now_us) {
+    tx_failed = true;
     add_log(UDS_LOG_TX_FAILED, now_us / 1000, current->tx_id, attempts, NULL);
     log_text_event(now_us, "uds_tx_failed", current->name, attempts);
-    finish();
+    finish(now_us);
 }
 
 // Sends tx_data (already filled) on tx_id; retries go through STATE_BACKOFF.
@@ -284,7 +413,7 @@ static void transmit(int64_t now_us) {
         .buffer = tx_data,
         .buffer_len = sizeof(tx_data),
     };
-    window_end_us = now_us + REPLY_WINDOW_US;
+    window_end_us = now_us + reply_window_us;
     if (twai_node_transmit(node, &tx_frame, 0) != ESP_OK) {
         atomic_store(&tx_result, TX_RESULT_FAILED);
     }
@@ -332,7 +461,7 @@ static void message_complete(uint64_t timestamp_us) {
     taskENTER_CRITICAL(&lock);
     message.seq++;
     message.t_ms = timestamp_us / 1000;
-    message.request = (uint8_t) (current - requests);
+    message.request = current == &scan_request ? UDS_CLIENT_SCAN_REQUEST : (uint8_t) (current - requests);
     message.id = isotp_id;
     message.len = isotp_len;
     memcpy(message.data, isotp_data, isotp_len);
@@ -390,7 +519,7 @@ static void on_consecutive_frame(const can_log_frame_t *frame) {
     isotp_received += n;
     isotp_next_sn = (isotp_next_sn + 1) & 0x0F;
     // N_Cr: the ECU has up to a second between consecutive frames.
-    window_end_us = frame->timestamp_us + REPLY_WINDOW_US;
+    window_end_us = frame->timestamp_us + reply_window_us;
     if (isotp_received == isotp_len) {
         message_complete(frame->timestamp_us);
         final_reply = true;
@@ -427,6 +556,7 @@ void uds_client_on_frame(const can_log_frame_t *frame) {
         return;
     }
     replies++;
+    last_reply_service = type == ISOTP_SINGLE ? frame->data[1] : frame->data[2];
     add_log(UDS_LOG_RX, frame->timestamp_us / 1000, frame->id, frame->dlc, frame->data);
     log_frame_event(frame->timestamp_us, "uds_rx", frame->id, frame->dlc, frame->data);
     if (type == ISOTP_FIRST) {
@@ -443,6 +573,48 @@ void uds_client_on_frame(const can_log_frame_t *frame) {
 void uds_client_poll(int64_t now_us, bool bus_ok) {
     switch (state) {
     case STATE_IDLE: {
+        if (atomic_exchange(&scan_stop_requested, false) && scanning) {
+            scan_end(now_us, "stopped");
+            atomic_store(&busy, false);
+        }
+        if (atomic_exchange(&scan_start_requested, false) && !scanning) {
+            taskENTER_CRITICAL(&lock);
+            memset(scan_results, UDS_SCAN_NOT_TRIED, ECU_COUNT);
+            scan_results[ECU_COUNT] = '\0';
+            scanning = true;
+            log_seq++;
+            taskEXIT_CRITICAL(&lock);
+            scan_next = 0;
+            (void) sd_logger_log_event(now_us, "scan_start", "TesterPresent to every PSA-RE address");
+        }
+        if (scanning) {
+            const uds_ecu_t *ecu = &ecus[scan_next];
+            scan_request = (uds_request_t) {
+                .name = ecu->node,
+                .label = ecu->label,
+                .tx_id = ecu->tx_id,
+                .rx_id_min = ecu->rx_id,
+                .rx_id_max = ecu->rx_id,
+                .data = {0x02, 0x3E, 0x00},
+            };
+            current = &scan_request;
+            memcpy(request_data, current->data, sizeof(request_data));
+            replies = 0;
+            tx_failed = false;
+            final_reply = false;
+            isotp_active = false;
+            flow_control_due = false;
+            reply_window_us = SCAN_WINDOW_US;
+            if (!bus_ok || !allowed(current->tx_id, request_data)) {
+                add_log(UDS_LOG_REFUSED, now_us / 1000, current->tx_id, 0, NULL);
+                log_text_event(now_us, "uds_refused", current->name, 0);
+                scan_end(now_us, "refused");
+                atomic_store(&busy, false);
+                return;
+            }
+            start_request(now_us);
+            return;
+        }
         uint8_t param[UDS_CLIENT_PARAM_MAX];
         taskENTER_CRITICAL(&request_lock);
         int index = pending;
@@ -459,14 +631,16 @@ void uds_client_poll(int64_t now_us, bool bus_ok) {
         memcpy(request_data, current->data, sizeof(request_data));
         memcpy(&request_data[current->param_offset], param, current->param_len);
         replies = 0;
+        tx_failed = false;
         final_reply = false;
         isotp_active = false;
         flow_control_due = false;
+        reply_window_us = REPLY_WINDOW_US;
         // An error-passive or bus-off node has been disturbing the bus already; don't add to it.
         if (!bus_ok || !allowed(current->tx_id, request_data)) {
             add_log(UDS_LOG_REFUSED, now_us / 1000, current->tx_id, 0, NULL);
             log_text_event(now_us, "uds_refused", current->name, 0);
-            finish();
+            finish(now_us);
             return;
         }
         start_request(now_us);
@@ -512,7 +686,7 @@ void uds_client_poll(int64_t now_us, bool bus_ok) {
         if (final_reply || now_us >= window_end_us) {
             add_log(UDS_LOG_DONE, now_us / 1000, current->tx_id, replies, NULL);
             log_text_event(now_us, "uds_done", current->name, replies);
-            finish();
+            finish(now_us);
         }
         return;
     }
@@ -544,6 +718,47 @@ esp_err_t uds_client_request(const char *name, const uint8_t *param, size_t para
         return err;
     }
     return ESP_ERR_NOT_FOUND;
+}
+
+esp_err_t uds_client_scan_start(void) {
+    if (atomic_load(&busy)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    // busy at once, so a request from the page cannot slip in before the logger loop picks the scan up.
+    atomic_store(&busy, true);
+    atomic_store(&scan_start_requested, true);
+    return ESP_OK;
+}
+
+void uds_client_scan_stop(void) {
+    atomic_store(&scan_stop_requested, true);
+}
+
+size_t uds_client_ecu_count(void) {
+    return ECU_COUNT;
+}
+
+const uds_ecu_t *uds_client_get_ecu(size_t index) {
+    return index < ECU_COUNT ? &ecus[index] : NULL;
+}
+
+bool uds_client_get_scan(char *out, size_t size, size_t *next) {
+    taskENTER_CRITICAL(&lock);
+    bool active = scanning;
+    *next = scan_next;
+    if (scan_results[0] == '\0') {
+        memset(scan_results, UDS_SCAN_NOT_TRIED, ECU_COUNT);
+    }
+    strlcpy(out, scan_results, size);
+    taskEXIT_CRITICAL(&lock);
+    return active;
+}
+
+const char *uds_client_request_name(uint8_t request) {
+    if (request == UDS_CLIENT_SCAN_REQUEST) {
+        return "scan";
+    }
+    return request < REQUEST_COUNT ? requests[request].name : "?";
 }
 
 size_t uds_client_request_count(void) {

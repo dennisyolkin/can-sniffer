@@ -31,7 +31,8 @@
 #define STATUS_JSON_MAX 768
 // Request list (about 90 characters per request, ~65 requests), UDS_CLIENT_LOG_LEN entries of about 110 characters
 // each, and the latest multi-frame message as hex (2 characters per byte).
-#define UDS_JSON_MAX (8192 + 2 * UDS_CLIENT_MSG_MAX)
+// Plus the ECU scan list (~70 characters per ECU).
+#define UDS_JSON_MAX (8192 + 2 * UDS_CLIENT_MSG_MAX + 6144)
 // Commands from the page are short ("rec on", "mark <label>"); anything longer closes the connection.
 #define MAX_INCOMING_LEN 64
 #define MAX_CLIENTS CONFIG_LWIP_MAX_SOCKETS
@@ -185,7 +186,7 @@ static size_t build_uds(uint32_t *seq) {
         n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos,
             "%s{\"t\":%" PRIu32 ",\"kind\":\"%s\",\"req\":\"%s\",\"id\":%u,\"len\":%u,"
             "\"data\":\"%02X%02X%02X%02X%02X%02X%02X%02X\"}",
-            i > 0 ? "," : "", e->t_ms, uds_kind_names[e->kind], uds_client_get_request(e->request)->name,
+            i > 0 ? "," : "", e->t_ms, uds_kind_names[e->kind], uds_client_request_name(e->request),
             (unsigned) e->id, (unsigned) e->len, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
     }
     if (n > 0 && pos + n < sizeof(uds_buf)) {
@@ -197,7 +198,7 @@ static size_t build_uds(uint32_t *seq) {
         pos += n;
         n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos,
             ",\"msg\":{\"seq\":%" PRIu32 ",\"t\":%" PRIu32 ",\"req\":\"%s\",\"id\":%u,\"len\":%u,\"data\":\"",
-            uds_message.seq, uds_message.t_ms, uds_client_get_request(uds_message.request)->name,
+            uds_message.seq, uds_message.t_ms, uds_client_request_name(uds_message.request),
             (unsigned) uds_message.id, (unsigned) uds_message.len);
         for (uint16_t i = 0; i < uds_message.len && n > 0 && pos + n < sizeof(uds_buf); i++) {
             pos += n;
@@ -208,9 +209,24 @@ static size_t build_uds(uint32_t *seq) {
             n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos, "\"}");
         }
     }
+    // "scan":{"active":bool,"next":n,"results":"AS..N","ecus":[["OBC","On-board charger",1424,1423],...]}
+    static char results[UDS_CLIENT_ECU_MAX + 1];
+    size_t next;
+    bool active = uds_client_get_scan(results, sizeof(results), &next);
     if (n > 0 && pos + n < sizeof(uds_buf)) {
         pos += n;
-        n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos, "}");
+        n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos, ",\"scan\":{\"active\":%s,\"next\":%u,\"results\":\"%s\","
+            "\"ecus\":[", active ? "true" : "false", (unsigned) next, results);
+    }
+    for (size_t i = 0; i < uds_client_ecu_count() && n > 0 && pos + n < sizeof(uds_buf); i++) {
+        pos += n;
+        const uds_ecu_t *e = uds_client_get_ecu(i);
+        n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos, "%s[\"%s\",\"%s\",%u,%u]", i > 0 ? "," : "", e->node,
+            e->label, (unsigned) e->tx_id, (unsigned) e->rx_id);
+    }
+    if (n > 0 && pos + n < sizeof(uds_buf)) {
+        pos += n;
+        n = snprintf(uds_buf + pos, sizeof(uds_buf) - pos, "]}}");
     }
     return n > 0 && pos + n < sizeof(uds_buf) ? pos + n : 0;
 }
@@ -344,6 +360,12 @@ static void handle_command(const char *text) {
     } else if (strcmp(text, "trip reset") == 0) {
         live_data_request_trip_reset();
 #if CONFIG_CAN_TX_MODE
+    } else if (strcmp(text, "uds_scan start") == 0) {
+        if (uds_client_scan_start() != ESP_OK) {
+            ESP_LOGW(TAG, "scan not started: a request is in flight");
+        }
+    } else if (strcmp(text, "uds_scan stop") == 0) {
+        uds_client_scan_stop();
     } else if (strncmp(text, "uds ", 4) == 0) {
         handle_uds_command(text + 4);
 #endif

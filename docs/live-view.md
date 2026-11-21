@@ -179,6 +179,16 @@ out-of-order frame, or a gap of more than 1 s, abandons the reply. The page log 
 control and "reply complete: N bytes" (not each consecutive frame; they are all in `can.log`); the values panel
 decodes the known DIDs, and each long reply has an expandable hex dump.
 
+**ECU scan** (Raw tab, "ECU scan" section): TesterPresent (`02 3E 00`) to each of the 63 diagnostic address pairs
+PSA-RE lists for `AEE2010.ev` (`ecus[]` in `uds_client.c`; the power tailgate `76B`→`66B` is left out because `66B`
+is in the car's own traffic), one at a time, 250 ms reply window each, about 20 s in total. Same rules as any
+request: allowlisted frame, `error_active` only, spaced retries; no other request while it runs, and Stop ends it
+after the current ECU. Result per ECU: answered, answered with a negative reply (it is there), silent, or could not
+be sent. The page lists the ECUs that answered; `events.csv` gets `scan_start`, one `scan_result` per ECU
+(`<node> <request ID> answered|negative|silent|not_sent`) and `scan_done`. The `uds` WebSocket message carries
+`"scan":{"active","next","results","ecus":[[node, label, tx, rx], …]}`, `results` one character per ECU (`A`
+answered, `N` negative, `S` silent, `X` not sent, `.` not tried); the page sends `uds_scan start` / `uds_scan stop`.
+
 Tried from the OBD port and removed because nothing ever answered (addresses from PSA-RE; kept here in case another
 port, session or address makes them work):
 

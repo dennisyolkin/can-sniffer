@@ -55,6 +55,9 @@
   .uds-group summary .busy { color: var(--accent); }
   .uds-group .btns { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin: .3rem 0 .2rem; }
   .uds-group button.run { border-color: var(--accent); color: var(--accent); }
+  #uds-scan .found { display: grid; grid-template-columns: max-content max-content 1fr; gap: .1rem .7rem; font-size: .85rem; margin-top: .3rem; }
+  #uds-scan .found .neg { color: var(--warn); }
+  #uds-scan .st { color: var(--muted); font-size: .8rem; margin-top: .3rem; }
   /* Requests that change the ECU's state (session control). */
   button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
   #uds-dtcs { margin: .3rem 0 .6rem; font-size: .9rem; }
@@ -312,6 +315,12 @@
   </div>
   <div id="uds" hidden>
     <h2>Diagnostics</h2>
+    <details class="uds-group" id="uds-scan">
+      <summary><span>ECU scan</span><span class="busy" id="uds-scan-busy"></span></summary>
+      <div class="btns"><button class="run" id="uds-scan-btn">Scan all ECUs</button></div>
+      <div class="st" id="uds-scan-status"></div>
+      <div class="found" id="uds-scan-found"></div>
+    </details>
     <div id="uds-buttons"></div>
     <div id="uds-dtcs"></div>
     <div id="uds-values"></div>
@@ -1024,6 +1033,7 @@ let udsMessageSeq = 0;
 let readAll = null;           // { queue: [names], current, after (board ms), sentAt (Date.now()) }
 
 const udsBusy = () => {
+  if (uds && uds.scan && uds.scan.active) return true;
   const last = uds && uds.log[uds.log.length - 1];
   return !!last && !FINAL_KINDS.includes(last.kind);
 };
@@ -1115,6 +1125,43 @@ function renderDtcs(online) {
   box.replaceChildren(...rows);
 }
 
+// --- ECU scan: TesterPresent to every PSA-RE address (uds_client.c), results one character per ECU ---
+const SCAN_TEXT = { A: "answered", N: "answered (negative reply)", S: "silent", X: "could not send", ".": "not tried" };
+
+function renderScan(online) {
+  const scan = uds.scan;
+  if (!scan) return;
+  const n = scan.ecus.length;
+  const btn = $("#uds-scan-btn");
+  setText(btn, scan.active ? "Stop scan" : `Scan all ${n} ECUs`);
+  btn.disabled = !online || (!scan.active && udsBusy());
+  setText($("#uds-scan-busy"), scan.active ? ` · ${scan.next}/${n}` : "");
+  const counts = {};
+  for (const c of scan.results) counts[c] = (counts[c] || 0) + 1;
+  const tried = n - (counts["."] || 0);
+  const answered = (counts.A || 0) + (counts.N || 0);
+  setText($("#uds-scan-status"), !tried ? "Not run since the board started. Parked, Ready on; takes about 20 s." :
+    (scan.active ? `Trying ${scan.ecus[scan.next] ? scan.ecus[scan.next][0] : "…"} · ` : "") +
+    `${answered} of ${tried} answered` + (counts.S ? `, ${counts.S} silent` : "") +
+    (counts.X ? `, ${counts.X} could not be sent` : ""));
+  const box = $("#uds-scan-found");
+  if (box.dataset.results === scan.results) return;
+  box.dataset.results = scan.results;
+  const rows = [];
+  scan.ecus.forEach(([node, label, tx, rx], i) => {
+    const r = scan.results[i];
+    if (r !== "A" && r !== "N" && r !== "X") return;
+    const cells = [node, `${hex(tx, 3)} → ${hex(rx, 3)}`, `${label}${r === "A" ? "" : " · " + SCAN_TEXT[r]}`];
+    for (const text of cells) {
+      const d = document.createElement("div");
+      d.textContent = text;
+      if (r !== "A") d.className = "neg";
+      rows.push(d);
+    }
+  });
+  box.replaceChildren(...rows);
+}
+
 function renderUds() {
   $("#uds").hidden = !uds;
   if (!uds) return;
@@ -1179,6 +1226,7 @@ function renderUds() {
       b.disabled = !online || udsBusy() || !!readAll;
     }
   }
+  renderScan(online);
   renderDtcs(online);
   const values = $("#uds-values");
   values.replaceChildren(...[...udsValues.values()].sort((a, b) => a.name.localeCompare(b.name)).flatMap(v => {
@@ -1296,6 +1344,10 @@ function connect() {
 function send(text) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(text);
 }
+
+$("#uds-scan-btn").onclick = () => {
+  send(uds && uds.scan && uds.scan.active ? "uds_scan stop" : "uds_scan start");
+};
 
 $("#trip-reset").onclick = () => {
   if (confirm("Start a new trip? The board's totals go back to zero.")) send("trip reset");

@@ -52,6 +52,27 @@ typedef struct {
 } uds_log_entry_t;
 
 #define UDS_CLIENT_PARAM_MAX 3
+// uds_log_entry_t.request / uds_message_t.request of a scan step (not an entry of the request table).
+#define UDS_CLIENT_SCAN_REQUEST 0xFF
+// Room for the scan's ECU list (63 now).
+#define UDS_CLIENT_ECU_MAX 64
+
+// A diagnostic address pair from PSA-RE (diag/AEE2010.ev): what the scan tries.
+typedef struct {
+    const char *node;   // PSA-RE node name(s), e.g. "OBC".
+    const char *label;
+    uint16_t tx_id;
+    uint16_t rx_id;
+} uds_ecu_t;
+
+// Scan result per ECU, as a character so the page gets them as one string.
+typedef enum {
+    UDS_SCAN_NOT_TRIED = '.',
+    UDS_SCAN_ANSWERED = 'A',  // Positive reply to TesterPresent.
+    UDS_SCAN_NEGATIVE = 'N',  // Answered, but with a negative reply (7F 3E …): it is there.
+    UDS_SCAN_SILENT = 'S',    // Sent, no reply within the window.
+    UDS_SCAN_NOT_SENT = 'X',  // Could not get the request onto the bus.
+} uds_scan_result_t;
 
 typedef struct {
     const char *name;   // Command name from the page: "uds <name>" or "uds <name> <hex param>".
@@ -83,4 +104,15 @@ size_t uds_client_request_count(void);
 const uds_request_t *uds_client_get_request(size_t index);
 // Copies the log oldest first; returns the entry count. seq changes whenever an entry is added.
 size_t uds_client_get_log(uds_log_entry_t *out, size_t max, uint32_t *seq);
+// Name of a log entry's request (handles scan steps).
+const char *uds_client_request_name(uint8_t request);
+
+// ECU scan: TesterPresent to every address in the list, one after another. ESP_ERR_INVALID_STATE while busy.
+esp_err_t uds_client_scan_start(void);
+void uds_client_scan_stop(void);
+size_t uds_client_ecu_count(void);
+const uds_ecu_t *uds_client_get_ecu(size_t index);
+// Copies one result character per ECU (NUL-terminated, out must hold count + 1); returns whether a scan runs and,
+// through next, which ECU is being tried.
+bool uds_client_get_scan(char *out, size_t size, size_t *next);
 void uds_client_get_message(uds_message_t *out);
