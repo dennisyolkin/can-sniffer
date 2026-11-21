@@ -37,8 +37,8 @@ static const char *TAG = "uds_client";
 
 // IDs: PSA-RE diag/AEE2010.ev. They never appear in the car's own traffic (checked against trip3 and the test
 // captures), so a request cannot collide with an ECU's frame. Padding is 0x00.
-// Only ECUs that answered from the OBD port (tx-logs-2) are listed; the BSI, the cluster and OBD-II never did
-// (docs/live-view.md, "Transmitting").
+// Only ECUs that answered from the OBD port (tx-logs-2, and the ECU scan of 20261120-01) are listed; the BSI, the
+// cluster and OBD-II never did (docs/live-view.md, "Transmitting").
 // BMS reads: DIDs from PSA-RE TBMU/BMU_CTE1. Values up to 4 bytes fit in a single-frame reply; longer ones come back
 // as ISO-TP multi-frame replies. The page decodes them; the label's "ECU:" prefix groups the buttons.
 #define REQUEST(req_name, req_label, tx, rx, ...) \
@@ -58,6 +58,22 @@ static const char *TAG = "uds_client";
 #define BMS_SESSION(req_name, req_label, session) \
     {.name = req_name, .label = "BMS session: " req_label, .tx_id = 0x6B4, .rx_id_min = 0x694, .rx_id_max = 0x694, \
      .data = {0x02, 0x10, session}, .danger = true}
+
+// The other ECUs that answered the scan (20261120-01), on the scan's address pairs. DIDs from PSA-RE
+// diag/AEE2010.ev (OBC_DCDC_ECMP, MCU_ECMP, EPLU), not yet checked against the car. The ECU names in the labels
+// are the page's (ECUS in index.html), which decodes the replies by reply ID.
+#define DID_READ(name, label, tx, rx, did) \
+    REQUEST(name, label, tx, rx, 0x03, 0x22, (uint8_t) ((did) >> 8), (uint8_t) ((did) & 0xFF))
+// F080 / F0FE have the same layout on all of them (and on the BMS): part number, supplier; software edition.
+#define ECU_IDENT(prefix, ecu, tx, rx) \
+    DID_READ(prefix "_f080", "Identification: " ecu " part no.", tx, rx, 0xF080), \
+    DID_READ(prefix "_f0fe", "Identification: " ecu " software", tx, rx, 0xF0FE), \
+    DID_READ(prefix "_f18c", "Identification: " ecu " serial", tx, rx, 0xF18C)
+#define ECU_DTC_COUNT(prefix, ecu, tx, rx) \
+    REQUEST(prefix "_dtc_count", "Fault counts: " ecu, tx, rx, 0x03, 0x19, 0x01, 0x09)
+#define MOTOR(name, label, did) DID_READ(name, "Motor: " label, 0x6A6, 0x686, did)
+#define OBC(name, label, did) DID_READ(name, "OBC: " label, 0x590, 0x58F, did)
+#define PARK_LOCK(name, label, did) DID_READ(name, "Park lock: " label, 0x5CA, 0x5AA, did)
 
 static const uds_request_t requests[] = {
     REQUEST("vcu_tp", "VCU: TesterPresent", 0x6A2, 0x682, 0x02, 0x3E, 0x00),
@@ -133,8 +149,58 @@ static const uds_request_t requests[] = {
     // the extended one open. Never the programming session (0x02).
     BMS_SESSION("bms_session_default", "Default (10 01)", 0x01),
     BMS_SESSION("bms_session_extended", "Extended (10 03)", 0x03),
+
+    ECU_IDENT("obc", "OBC", 0x590, 0x58F),
+    ECU_IDENT("cmel", "Motor", 0x6A6, 0x686),
+    ECU_IDENT("vcu", "VCU", 0x6A2, 0x682),
+    ECU_IDENT("abs", "ABS", 0x6AD, 0x68D),
+    ECU_IDENT("dae", "Steering", 0x6B5, 0x695),
+    ECU_IDENT("eplu", "Park lock", 0x5CA, 0x5AA),
+    ECU_IDENT("cvm", "Camera", 0x74A, 0x64A),
+
+    ECU_DTC_COUNT("obc", "OBC", 0x590, 0x58F),
+    ECU_DTC_COUNT("cmel", "Motor", 0x6A6, 0x686),
+    ECU_DTC_COUNT("vcu", "VCU", 0x6A2, 0x682),
+    ECU_DTC_COUNT("abs", "ABS", 0x6AD, 0x68D),
+    ECU_DTC_COUNT("dae", "Steering", 0x6B5, 0x695),
+    ECU_DTC_COUNT("eplu", "Park lock", 0x5CA, 0x5AA),
+    ECU_DTC_COUNT("cvm", "Camera", 0x74A, 0x64A),
+
+    // DC05 / DC06 next to the BMS's D816 / D815 tell the traction load from the auxiliaries (the 3A8 energy
+    // counter came out ~18 % below 563 x 5C3 on 2026-11-20); DC5B pins down the scale of 208 b5 (torque).
+    MOTOR("cmel_dc00", "Speed", 0xDC00),
+    MOTOR("cmel_dc5b", "Torque", 0xDC5B),
+    MOTOR("cmel_dcb6", "Torque (DCB6)", 0xDCB6),
+    MOTOR("cmel_dc69", "Reduced torque", 0xDC69),
+    MOTOR("cmel_dc05", "Battery current", 0xDC05),
+    MOTOR("cmel_dc06", "Battery voltage", 0xDC06),
+    MOTOR("cmel_dc02", "Coolant temp", 0xDC02),
+    MOTOR("cmel_dc04", "Inverter temp", 0xDC04),
+    MOTOR("cmel_dc10", "Inverter temp (DC10)", 0xDC10),
+    MOTOR("cmel_dc70", "Stator temp", 0xDC70),
+    MOTOR("cmel_dc71", "Rotor temp", 0xDC71),
+
+    OBC("obc_d824", "DC/DC input voltage", 0xD824),
+    OBC("obc_d825", "DC/DC input current", 0xD825),
+    OBC("obc_d828", "DC/DC output voltage", 0xD828),
+    OBC("obc_d829", "DC/DC output current", 0xD829),
+    OBC("obc_d826", "DC/DC temp", 0xD826),
+    OBC("obc_d827", "DC/DC status", 0xD827),
+    OBC("obc_d822", "12 V battery", 0xD822),
+    OBC("obc_d82b", "Mains voltage", 0xD82B),
+    OBC("obc_d82c", "Mains current", 0xD82C),
+    OBC("obc_d82d", "Charging cable", 0xD82D),
+    OBC("obc_d8aa", "Recharge status", 0xD8AA),
+    OBC("obc_d8eb", "Charge level", 0xD8EB),
+
+    PARK_LOCK("eplu_d400", "Status", 0xD400),
+    PARK_LOCK("eplu_d40c", "Activations", 0xD40C),
+    PARK_LOCK("eplu_d40e", "Activation errors", 0xD40E),
+    PARK_LOCK("eplu_d404", "Supply voltage", 0xD404),
 };
 #define REQUEST_COUNT (sizeof(requests) / sizeof(requests[0]))
+// Log entries store the request index in a byte, with UDS_CLIENT_SCAN_REQUEST reserved.
+_Static_assert(REQUEST_COUNT < UDS_CLIENT_SCAN_REQUEST, "request index no longer fits in uds_log_entry_t");
 
 // Every diagnostic address pair PSA-RE lists for AEE2010.ev (generated from diag/AEE2010.ev/*/*/ecu.yml), what the
 // scan tries. Left out: the power tailgate (76B -> 66B), because 66B is in the car's own traffic. Some are for other

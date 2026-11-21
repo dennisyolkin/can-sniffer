@@ -189,6 +189,25 @@ be sent. The page lists the ECUs that answered; `events.csv` gets `scan_start`, 
 `"scan":{"active","next","results","ecus":[[node, label, tx, rx], …]}`, `results` one character per ECU (`A`
 answered, `N` negative, `S` silent, `X` not sent, `.` not tried); the page sends `uds_scan start` / `uds_scan stop`.
 
+The 7 other ECUs that answered the scan (20261120-01) have their own requests, on the scan's address pairs, all
+single `0x22` reads or `19 01 09` and none checked against the car yet (encodings: PSA-RE `diag/AEE2010.ev`
+`MCU_ECMP`, `OBC_DCDC_ECMP`, `EPLU`; tables `MOTOR_DIDS`, `OBC_DIDS`, `PARK_LOCK_DIDS` in `index.html`). The page
+decodes a reply by the ECU's reply ID as well as the DID, so `D822` from the OBC (×0.01 V) and from the BMS
+(×0.001 V) don't mix, and shows the value with the ECU's name in front (the BMS's without). Each section has "Read
+all".
+
+| Section | ECUs (request → reply) | DIDs |
+|---------|------------------------|------|
+| Identification | OBC `590`→`58F`, Motor (CMEL) `6A6`→`686`, VCU `6A2`→`682`, ABS `6AD`→`68D`, Steering (DAE) `6B5`→`695`, Park lock (EPLU) `5CA`→`5AA`, Camera (CVM) `74A`→`64A` | `F080` part number / supplier / additional reference (supplier names from PSA-RE), `F0FE` software, `F18C` serial (shown as hex + text). Same layout on all of them |
+| Fault counts | the same 7 | `19 01 09`; the page lists the count per ECU. Lists and records stay BMS-only (the DTC names are the BMS's) |
+| Motor | CMEL | `DC00` speed (rpm), `DC5B` torque (×0.1 − 1638.3 Nm), `DCB6` / `DC69` torque variants (signed ×1/32, ×1/16 Nm), `DC05` / `DC06` battery current / voltage at the inverter (signed ×1/16 A, ×1/32 V), `DC02` coolant, `DC04` / `DC10` inverter, `DC70` stator, `DC71` rotor temperature (signed ×1/64 °C) |
+| OBC | OBC / DC-DC | `D824` / `D825` DC/DC input V / A (×0.2), `D828` / `D829` output V (×0.1) / A, `D826` temperature, `D827` status, `D822` 12 V (×0.01), `D82B` / `D82C` mains V / A (×0.2), `D82D` cable, `D8AA` recharge status, `D8EB` charge level (×0.1 %) |
+| Park lock | EPLU | `D400` status, `D40C` activations, `D40E` activation errors (4 B counters), `D404` supply voltage (×0.001 V) |
+
+Why: `DC5B` next to a capture gives the true scale of `208` b5 (torque, ×2 Nm estimated). `DC05`/`DC06` next to
+the BMS's `D816`/`D815` tell the traction load from the auxiliaries: on 2026-11-20 the `3A8` energy counter came
+out ~18 % below `563` × `5C3` (docs/signals.md).
+
 Tried from the OBD port and removed because nothing ever answered (addresses from PSA-RE; kept here in case another
 port, session or address makes them work):
 

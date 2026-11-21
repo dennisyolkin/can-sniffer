@@ -360,7 +360,7 @@
     {"k": "ready", "id": "572", "bits": "1.3-1.2", "t": "enum", "enum": {"0": "Off", "1": "Starting", "2": "Ready", "3": "Stopped"}, "conf": "confirmed"},
     {"k": "accel", "id": "208", "bits": "4.7-4.0", "f": 0.5, "inv": 255, "dec": 0, "conf": "verified"},
     {"k": "brake", "id": "3CD", "bits": "6.7-7.4", "f": 0.1, "o": -55, "inv": 4095, "dec": 0, "conf": "psa-re"},
-    {"k": "torque", "id": "208", "bits": "3.7-3.0", "f": 2, "o": -100, "inv": 255, "dec": 0, "conf": "psa-re"},
+    {"k": "torque", "id": "208", "bits": "6.7-6.0", "t": "s", "f": 2, "dec": 0, "conf": "ours"},
     {"k": "steer", "id": "305", "bits": "1.7-2.0", "t": "s", "f": 0.1, "inv": 32767, "dec": 0, "conf": "verified"},
     {"k": "lat_acc", "id": "3CD", "bits": "1.7-2.0", "t": "s", "f": 0.05, "inv": 32767, "dec": 1, "conf": "verified"},
     {"k": "speed_limit", "id": "5F2", "bits": "3.7-3.0", "inv": [254, 255], "dec": 0, "conf": "psa-re"},
@@ -869,36 +869,108 @@ const DIDS = {
   0xF18B: { n: "Manufacturing date", o: 0, l: 3, bcd: true },
 };
 
+// The ECUs there are requests for, by reply ID (the names match the labels in uds_client.c). Their values show
+// with the name in front; the BMS's without, as before.
+const BMS_RX = 0x694;
+const ECUS = { 0x694: "BMS", 0x58F: "OBC", 0x686: "Motor", 0x682: "VCU", 0x68D: "ABS", 0x695: "Steering",
+  0x5AA: "Park lock", 0x64A: "Camera" };
+const ecuPrefix = id => id === BMS_RX ? "" : (ECUS[id] || hex(id, 3)) + " ";
+// PSA-RE diag/AEE2010.ev MCU_ECMP, OBC_DCDC_ECMP and EPLU; not yet checked against the car. s: signed.
+const TEMP16 = n => ({ n, o: 0, l: 2, s: true, f: 1 / 64, u: "°C", d: 1 });
+const MOTOR_DIDS = {
+  0xDC00: { n: "Speed", o: 0, l: 2, s: true, u: "rpm" },
+  0xDC5B: { n: "Torque", o: 0, l: 2, f: 0.1, off: -1638.3, u: "Nm", d: 1 },
+  0xDCB6: { n: "Torque (DCB6)", o: 0, l: 2, s: true, f: 1 / 32, u: "Nm", d: 1 },
+  0xDC69: { n: "Reduced torque", o: 0, l: 2, s: true, f: 1 / 16, u: "Nm", d: 1 },
+  0xDC05: { n: "Battery current", o: 0, l: 2, s: true, f: 1 / 16, u: "A", d: 1 },
+  0xDC06: { n: "Battery voltage", o: 0, l: 2, s: true, f: 1 / 32, u: "V", d: 1 },
+  0xDC02: TEMP16("Coolant temp"),
+  0xDC04: TEMP16("Inverter temp"),
+  0xDC10: TEMP16("Inverter temp (DC10)"),
+  0xDC70: TEMP16("Stator temp"),
+  0xDC71: TEMP16("Rotor temp"),
+};
+const OBC_DIDS = {
+  0xD824: { n: "DC/DC input voltage", o: 0, l: 2, u: "V" },
+  0xD825: { n: "DC/DC input current", o: 0, l: 1, f: 0.2, u: "A", d: 1 },
+  0xD828: { n: "DC/DC output voltage", o: 0, l: 1, f: 0.1, u: "V", d: 1 },
+  0xD829: { n: "DC/DC output current", o: 0, l: 1, u: "A" },
+  0xD826: { n: "DC/DC temp", o: 0, l: 1, u: "°C" },
+  0xD827: { n: "DC/DC status", o: 0, l: 1, e: ["off", "initialising", "standby", "converting", "ERROR", "damaged",
+    "reserved", "not valid"] },
+  0xD822: { n: "12 V battery", o: 0, l: 2, f: 0.01, u: "V", d: 2 },
+  0xD82B: { n: "Mains voltage", o: 0, l: 2, u: "V" },
+  0xD82C: { n: "Mains current", o: 0, l: 1, f: 0.2, u: "A", d: 1 },
+  0xD82D: { n: "Charging cable", o: 0, l: 1, e: ["connected", "disconnected", "unavailable"] },
+  0xD8AA: { n: "Recharge status", o: 0, l: 1, e: ["charging", "stopped, incomplete", "stopped, complete",
+    "not available"] },
+  0xD8EB: { n: "Charge level", o: 0, l: 2, f: 0.1, u: "%", d: 1 },
+};
+const PARK_LOCK_DIDS = {
+  0xD400: { n: "Status", o: 0, l: 1, e: ["locked", "unlocked", "intermediate", "invalid"] },
+  0xD40C: { n: "Activations", o: 0, l: 4 },
+  0xD40E: { n: "Activation errors", o: 0, l: 4 },
+  0xD404: { n: "Supply voltage", o: 0, l: 2, f: 0.001, u: "V", d: 2 },
+};
+const ECU_DIDS = { 0x694: DIDS, 0x686: MOTOR_DIDS, 0x58F: OBC_DIDS, 0x5AA: PARK_LOCK_DIDS };
+// Any ECU. PSA-RE gives F18C (serial) one byte; whatever comes back is shown, as hex and text.
+const COMMON_DIDS = { 0xF18C: { n: "Serial", o: 0, rest: true } };
+const ascii = v => String.fromCharCode(...v.filter(x => x >= 0x20 && x < 0x7F));
+
 function frameBytes(e) {
   const b = [];
   for (let i = 0; i < 2 * e.len; i += 2) b.push(parseInt(e.data.slice(i, i + 2), 16));
   return b;
 }
 
-// Positive ReadDataByIdentifier reply (single frame: len, 62, DID hi, DID lo, value…) → { did, name, text }.
-function decodeDid(b) {
+// Positive ReadDataByIdentifier reply (single frame: len, 62, DID hi, DID lo, value…) from the ECU replying on id
+// → { did, key, name, text }. key tells the same DID of different ECUs apart.
+function decodeDid(b, id) {
   if (b.length < 4 || b[0] >> 4 !== 0 || b[1] !== 0x62) return null;
-  const did = (b[2] << 8) | b[3], spec = DIDS[did];
+  const did = (b[2] << 8) | b[3], spec = (ECU_DIDS[id] || {})[did] || COMMON_DIDS[did];
   if (!spec) return null;
-  const value = b.slice(4, 1 + b[0]).slice(spec.o, spec.o + spec.l);
-  if (value.length < spec.l) return { did, name: spec.n, text: "short reply" };
-  if (spec.bcd) return { did, name: spec.n, text: value.map(x => hex(x)).join(" ") };
+  const r = { did, key: id * 0x10000 + did, name: ecuPrefix(id) + spec.n };
+  const rest = b.slice(4, 1 + b[0]);
+  if (spec.rest) return { ...r, text: `${rest.map(x => hex(x)).join(" ")} "${ascii(rest)}"` };
+  const value = rest.slice(spec.o, spec.o + spec.l);
+  if (value.length < spec.l) return { ...r, text: "short reply" };
+  if (spec.bcd) return { ...r, text: value.map(x => hex(x)).join(" ") };
   if (spec.raw) {
     let n = 0;
     for (const x of value) n = n * 256 + x;
-    return { did, name: spec.n, text: `${value.map(x => hex(x)).join(" ")} (${n})` };
+    return { ...r, text: `${value.map(x => hex(x)).join(" ")} (${n})` };
   }
   let raw = 0;
   for (const x of value) raw = raw * 256 + x;  // Not <<: a 4-byte value would turn negative.
-  if (spec.e) return { did, name: spec.n, text: spec.e[raw] || "0x" + hex(raw) };
+  if (spec.s && raw >= 2 ** (8 * spec.l - 1)) raw -= 2 ** (8 * spec.l);
+  if (spec.e) return { ...r, text: spec.e[raw] || "0x" + hex(raw) };
   const v = raw * (spec.f || 1) + (spec.off || 0);
-  return { did, name: spec.n, text: v.toFixed(spec.d || 0) + (spec.u ? " " + spec.u : "") };
+  return { ...r, text: v.toFixed(spec.d || 0) + (spec.u ? " " + spec.u : "") };
 }
 
-// Multi-frame DIDs (PSA-RE BMU_CTE1). v = the value after "62 DID"; returns { name, text } items for the values panel.
+// Multi-frame DIDs. v = the value after "62 DID", ecu = the ECU's name; returns { name, text } items for the values
+// panel. bms: BMS only (PSA-RE BMU_CTE1); the identification DIDs have the same layout on every ECU that answered.
 const BCD = b => b.map(x => hex(x)).join("");
+const SUPPLIERS = { 1: "PSA", 2: "MAGNETI MARELLI", 3: "BOSCH", 4: "SIEMENS", 5: "SAGEM", 6: "VALEO",
+  7: "ZF", 8: "BENDIX", 9: "TEVES", 10: "LUCAS", 11: "HELLA", 12: "BITRON", 13: "CONTINENTAL", 14: "AUTOLIV", 15: "TRW",
+  16: "TEMIC", 17: "HEULIEZ", 18: "TEXTON", 19: "DELPHI", 20: "PHILIPS", 21: "CLARION", 22: "WEBASTO",
+  23: "EBERSPACHER", 24: "ITT", 25: "BEHR", 26: "DAV", 27: "BRC", 28: "HPI", 29: "EATON", 30: "SC2N", 31: "MARWAL",
+  32: "INALFA", 33: "JTEKT", 35: "CTS", 36: "KOSTAL", 37: "CONTROL DEVICES", 38: "VISTEON", 39: "FICOSA",
+  40: "BROSE", 41: "NIPPON SEIKI", 42: "AUTOMOTIVE LIGHTING", 43: "PANASONIC", 44: "JCAE", 45: "FAURECIA",
+  46: "BORG", 47: "STABILUS", 48: "AISIN WARNER", 49: "MGI", 50: "SOGADIS", 51: "METASYSTEM", 52: "PSS",
+  53: "ARVIN MERITOR", 54: "DENSO", 55: "WABCO", 56: "DURA", 57: "HARMAN BECKER - JBL", 58: "WAGON", 59: "PIONEER",
+  60: "YAZAKI", 61: "FIAMM", 62: "HITGT", 63: "CATEM", 64: "HISENSE", 65: "YAZAKI", 66: "S&T DAEWOO",
+  67: "DENON", 68: "MARQUARDT", 69: "HUF", 70: "GENTEX", 71: "TYCO", 72: "PAULSTRA", 73: "FAMAR", 74: "MTA",
+  75: "VISIOCORP", 76: "LEGGET&PLATT", 77: "KONGSBERG", 78: "HANGSHENG", 79: "SANYO", 80: "COBRA", 81: "SONCEBOZ",
+  82: "LEAR", 83: "CASCO", 84: "EPCOS", 85: "ACCEL", 86: "NAVTEQ", 87: "TAKATA", 88: "DEFOND", 89: "VIMERCATI",
+  90: "INERGY", 91: "MAGNA STEYR", 92: "MITSUBISHI MOTORS", 93: "SANDEN", 94: "HIROSE", 95: "XIAMEN TTE",
+  96: "BOUYGUES TELECOM", 97: "XINGUANG", 98: "LITHIUM ENERGY JAPAN", 99: "CHASSIS BRAKES INTERNATIONAL",
+  100: "WITTE", 101: "TOMTOM", 102: "ARKAMYS", 103: "NUANCE", 104: "LEONI WIRING SYSTEMS FRAN", 105: "GETRAG",
+  106: "KAMCOM", 107: "LG ELECTRONICS", 108: "SOJADIS", 109: "KYB", 110: "HUAWEI", 111: "INTEVA",
+  113: "LG CHEM", 116: "CATL", 122: "MOBIS", 126: "ADVANCED COMFORT SYSTEMS", 142: "GKN", 157: "CONTINENTAL_MMC",
+  254: "NIPPON DENSO" };
 const LONG_DIDS = {
-  0xD4B5: { n: "Cell SoH", decode: v => {
+  0xD4B5: { n: "Cell SoH", bms: true, decode: v => {
     // 108 cells × 2 bytes. PSA-RE only says "bytes"; ÷16 % is a guess from D860 (pack SoH uses that scale).
     const cells = [];
     for (let i = 0; i + 1 < v.length; i += 2) cells.push(((v[i] << 8) | v[i + 1]) / 16);
@@ -911,23 +983,25 @@ const LONG_DIDS = {
       { name: "Weakest cells", text: sorted.slice(0, 3).map(([x, n]) => `#${n} ${x.toFixed(1)}`).join(", ") },
     ];
   } },
-  0xF080: { n: "ECU identification", decode: v => [
-    { name: "BMS part number", text: BCD(v.slice(0, 5)) },
-    // Bytes 5-6 (PSA-RE 6.7-7.0); bms-isotp-1: 00 74.
-    { name: "BMS supplier", text: v[6] === 0x74 ? "CATL" : "0x" + hex(((v[5] || 0) << 8) | (v[6] || 0), 4) },
-    { name: "BMS additional reference", text: BCD(v.slice(7, 12)) },
+  0xF080: { n: "ECU identification", decode: (v, ecu) => {
+    // Bytes 5-6 (PSA-RE 6.7-7.0); bms-isotp-1: 00 74 = CATL.
+    const supplier = ((v[5] || 0) << 8) | (v[6] || 0);
+    return [
+      { name: `${ecu} part number`, text: BCD(v.slice(0, 5)) },
+      { name: `${ecu} supplier`, text: SUPPLIERS[supplier] || "0x" + hex(supplier, 4) },
+      { name: `${ecu} additional reference`, text: BCD(v.slice(7, 12)) },
+    ];
+  } },
+  0xF0FE: { n: "Software", decode: (v, ecu) => [
+    { name: `${ecu} software edition`, text: String((v[11] << 8) | v[12]) },
+    { name: `${ecu} software download date`, text: BCD(v.slice(13, 16)) },
+    { name: `${ecu} software downloads`, text: String(v[20]) },
+    { name: `${ecu} software reference`, text: BCD(v.slice(21, 24)) },
   ] },
-  0xF0FE: { n: "Software", decode: v => [
-    { name: "BMS software edition", text: String((v[11] << 8) | v[12]) },
-    { name: "BMS software download date", text: BCD(v.slice(13, 16)) },
-    { name: "BMS software downloads", text: String(v[20]) },
-    { name: "BMS software reference", text: BCD(v.slice(21, 24)) },
-  ] },
+  0xF18C: { n: "Serial", decode: (v, ecu) => [{ name: `${ecu} serial`, text: ascii(v) }] },
   // ASCII, NUL-terminated (bms-isotp-1: "34VB0N0004787").
-  0xD901: { n: "Serial number", decode: v => [
-    { name: "BMS serial number", text: String.fromCharCode(...v.filter(x => x >= 0x20 && x < 0x7F)) },
-  ] },
-  0xD465: { n: "D465", decode: v => {
+  0xD901: { n: "Serial number", bms: true, decode: v => [{ name: "BMS serial number", text: ascii(v) }] },
+  0xD465: { n: "D465", bms: true, decode: v => {
     if (v.length < 151) return [];
     // b148-150, 24-bit big-endian, seconds: +8,605 over a ~2.4 h charge, +3,551 over a ~1 h drive, +108 in 123 s
     // parked, but only +213 over a 35 min drive and three days (trip-20261104). So not awake time; time in some
@@ -956,7 +1030,7 @@ function dtcEntry(b0, b1, ftb, status) {
 }
 
 let dtcList = null;    // { t, items, mask } from the latest 59 02
-let dtcCount = null;   // { t, n } from the latest 59 01
+const dtcCounts = new Map();  // reply ID → { t, n } from the latest 59 01
 let session = null;    // { t, type, p2, p2star } from the latest 50 xx
 
 // Short description of a positive 0x59 / 0x50 reply, for the log line.
@@ -970,19 +1044,23 @@ function describeUds(p) {
 
 const newer = (state, t) => !state || t >= state.t;
 
-// Every positive reply payload (single frame or reassembled) goes through here.
-function handlePayload(p, t) {
+// Every positive reply payload (single frame or reassembled) from the ECU replying on id goes through here.
+function handlePayload(p, t, id) {
   if (p[0] === 0x62 && p.length >= 3) {
     const did = (p[1] << 8) | p[2];
-    if (LONG_DIDS[did] || p.length > 7) {
-      const spec = LONG_DIDS[did] || { n: "DID " + hex(did, 4) };
-      udsMessages.set(hex(did, 4), { name: spec.n, bytes: p.slice(3), t });
-      for (const [i, item] of (spec.decode ? spec.decode(p.slice(3)) : []).entries()) {
-        udsValues.set(did * 16 + i, { did, ...item, t });
+    const known = LONG_DIDS[did] && (!LONG_DIDS[did].bms || id === BMS_RX) ? LONG_DIDS[did] : null;
+    if (known || p.length > 7) {
+      const spec = known || { n: "DID " + hex(did, 4) };
+      udsMessages.set(ecuPrefix(id) + hex(did, 4), { name: spec.n, bytes: p.slice(3), t });
+      const ecu = ECUS[id] || hex(id, 3);
+      for (const [i, item] of (spec.decode ? spec.decode(p.slice(3), ecu) : []).entries()) {
+        udsValues.set((id * 0x10000 + did) * 16 + i, { did, ...item, t });
       }
     }
   } else if (p[0] === 0x59 && p[1] === 0x01 && p.length >= 6) {
-    if (newer(dtcCount, t)) dtcCount = { t, n: (p[4] << 8) | p[5] };
+    if (newer(dtcCounts.get(id), t)) dtcCounts.set(id, { t, n: (p[4] << 8) | p[5] });
+  } else if (id !== BMS_RX) {
+    // Fault lists, records and sessions are only requested from the BMS (and decoded with its DTC names).
   } else if (p[0] === 0x59 && p[1] === 0x02 && newer(dtcList, t)) {
     const items = [];
     for (let i = 3; i + 3 < p.length; i += 4) items.push(dtcEntry(p[i], p[i + 1], p[i + 2], p[i + 3]));
@@ -1019,7 +1097,7 @@ function udsLine(e) {
     what = `negative: ${NRC[b[3]] || "NRC " + hex(b[3])}`;
     cls = b[3] === 0x78 ? "meta" : "neg";
   } else {
-    const v = decodeDid(b);
+    const v = decodeDid(b, e.id);
     what = v ? `${v.name} = ${v.text}` : describeUds(b.slice(1, 1 + b[0])) || "positive";
     cls = "pos";
   }
@@ -1027,7 +1105,7 @@ function udsLine(e) {
 }
 
 const FINAL_KINDS = ["done", "tx_failed", "refused"];
-const udsValues = new Map();  // DID → { name, text, t }, newest reply per DID; survives the 16-entry board log
+const udsValues = new Map();  // key → { name, text, t }, newest reply per ECU + DID; survives the 16-entry board log
 const udsMessages = new Map();  // key (DID hex, or DTC + record type) → { name, bytes, t }, newest per key
 let udsMessageSeq = 0;
 let readAll = null;           // { queue: [names], current, after (board ms), sentAt (Date.now()) }
@@ -1055,17 +1133,17 @@ function onUds(msg) {
     udsMessageSeq = m.seq;
     const p = [];
     for (let i = 0; i < m.data.length; i += 2) p.push(parseInt(m.data.slice(i, i + 2), 16));
-    handlePayload(p, m.t);
+    handlePayload(p, m.t, m.id);
   }
   for (const e of msg.log) {
     if (e.kind !== "rx") continue;
     const b = frameBytes(e);
     if (b[0] >> 4 !== 0) continue;  // First frames: the reassembled message is handled above.
-    const v = decodeDid(b);
-    const old = v && udsValues.get(v.did);
-    if (v && (!old || old.t <= e.t)) udsValues.set(v.did, { ...v, t: e.t });
+    const v = decodeDid(b, e.id);
+    const old = v && udsValues.get(v.key);
+    if (v && (!old || old.t <= e.t)) udsValues.set(v.key, { ...v, t: e.t });
     // The log is resent with every change; handlePayload ignores replies older than what it has.
-    handlePayload(b.slice(1, 1 + b[0]), e.t);
+    handlePayload(b.slice(1, 1 + b[0]), e.t, e.id);
   }
   if (!readAll) return;
   const finished = msg.log.some(e => e.req === readAll.current && FINAL_KINDS.includes(e.kind) && e.t > readAll.after);
@@ -1091,9 +1169,10 @@ function renderDtcs(online) {
       ` at ${(session.t / 1000).toFixed(0)} s. The extended session ends by itself ~5 s after the last request.`;
     rows.push(d);
   }
-  if (dtcCount) {
+  if (dtcCounts.size) {
     const d = document.createElement("div");
-    d.textContent = `Fault count (active / confirmed): ${dtcCount.n} at ${(dtcCount.t / 1000).toFixed(0)} s`;
+    d.textContent = "Fault count (active / confirmed): " + [...dtcCounts].map(([id, c]) =>
+      `${ECUS[id] || hex(id, 3)} ${c.n} (${(c.t / 1000).toFixed(0)} s)`).join(" · ");
     rows.push(d);
   }
   if (dtcList) {
@@ -1190,7 +1269,7 @@ function renderUds() {
       const btns = document.createElement("div");
       btns.className = "btns";
       g.append(sum, btns);
-      const reads = reqs.filter(r => /_[0-9a-f]{4}$/.test(r.name)).map(r => r.name);
+      const reads = reqs.filter(r => /_([0-9a-f]{4}|dtc_count)$/.test(r.name)).map(r => r.name);
       if (reads.length > 1) {
         const all = document.createElement("button");
         all.className = "run";
