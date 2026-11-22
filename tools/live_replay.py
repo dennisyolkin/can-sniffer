@@ -53,12 +53,15 @@ class Replay:
         self.sessions = 0
         self.new_trip(0)
         self.trip_last = None
+        self.last_mah = None
+        self.volts_x4 = 0
 
     # Same counting as main/trip_energy.c, so the page's "This trip" panel can be tried without the car.
     def new_trip(self, since_ms: int) -> None:
         km = getattr(self, "trip", {}).get("km_now", -1)
         self.trip = {"drawn_wh": 0, "regen_wh": 0, "net_wh": 0, "cycles": 0, "gaps": 0, "since_ms": since_ms,
-                     "km_start": km, "km_now": km}
+                     "km_start": km, "km_now": km, "bat_out_wh": 0, "bat_in_wh": 0, "bat_skips": 0}
+        self.bat_qmwh = [0, 0]  # out, in; mAh × quarter volts, as on the board
 
     def count_trip(self, can_id: int, data: bytes) -> None:
         wrap = lambda now, before: (now - before + 384) % 256 - 128
@@ -72,6 +75,23 @@ class Replay:
                     self.trip["drawn_wh"] += max(0, wrap(b[1], self.trip_last[1]))
                     self.trip["regen_wh"] += max(0, -wrap(b[2], self.trip_last[2]))
             self.trip_last = b
+        elif can_id == 0x5C3 and len(data) >= 2:
+            raw = (data[0] << 3) | (data[1] >> 5)
+            if raw != 0x7FF:
+                self.volts_x4 = raw
+        elif can_id == 0x563 and len(data) >= 7:
+            mah = (data[4] << 12) | (data[5] << 4) | (data[6] >> 4)
+            if mah in (0, 0xFFFFF) or not self.volts_x4:
+                return
+            if self.last_mah is not None:
+                step = mah - self.last_mah
+                if abs(step) > 1000:
+                    self.trip["bat_skips"] += 1
+                else:
+                    self.bat_qmwh[0 if step < 0 else 1] += abs(step) * self.volts_x4
+                self.trip["bat_out_wh"] = self.bat_qmwh[0] // 4000
+                self.trip["bat_in_wh"] = self.bat_qmwh[1] // 4000
+            self.last_mah = mah
         elif can_id == 0x552:
             km = (data[4] << 16) | (data[5] << 8) | data[6]
             if km != 0xFFFFFF:

@@ -355,11 +355,15 @@ static esp_err_t log_sd_stats(uint64_t timestamp_us, const sd_logger_stats_t *st
     return sd_logger_log_event(timestamp_us, "sd_stats", text);
 }
 
-// "drawn_wh=… regen_wh=… net_wh=… cycles=… gaps=… km=…" (km −1 until the odometer was seen twice).
+// "drawn_wh=… regen_wh=… net_wh=… cycles=… gaps=… km=… bat_out_wh=… bat_in_wh=… bat_skips=…" (km −1 until the
+// odometer was seen twice).
+#define TRIP_TEXT_MAX 192
 static void format_trip(const trip_energy_t *trip, char *text, size_t size) {
     int32_t km = trip->km_start >= 0 && trip->km_now >= 0 ? trip->km_now - trip->km_start : -1;
     snprintf(text, size, "drawn_wh=%" PRId32 " regen_wh=%" PRId32 " net_wh=%" PRId32 " cycles=%" PRIu32
-        " gaps=%" PRIu32 " km=%" PRId32, trip->drawn_wh, trip->regen_wh, trip->net_wh, trip->cycles, trip->gaps, km);
+        " gaps=%" PRIu32 " km=%" PRId32 " bat_out_wh=%" PRId32 " bat_in_wh=%" PRId32 " bat_skips=%" PRIu32,
+        trip->drawn_wh, trip->regen_wh, trip->net_wh, trip->cycles, trip->gaps, km, trip->battery_out_wh,
+        trip->battery_in_wh, trip->battery_skips);
 }
 
 // The trip once a minute, and the number of connected pages when it changes (so a capture shows when the page was
@@ -369,7 +373,7 @@ static esp_err_t log_trip_events(uint64_t now, session_t *session) {
     if (session->trip_logged_us == 0 || now - session->trip_logged_us >= TRIP_LOG_PERIOD_US) {
         trip_energy_t trip;
         trip_energy_get(&trip);
-        char text[96];
+        char text[TRIP_TEXT_MAX];
         format_trip(&trip, text, sizeof(text));
         err = sd_logger_log_event(now, "trip", text);
         session->trip_logged_us = now;
@@ -583,7 +587,7 @@ void app_main(void) {
             if (writable) {
                 trip_energy_t old;
                 trip_energy_get(&old);
-                char text[96];
+                char text[TRIP_TEXT_MAX];
                 format_trip(&old, text, sizeof(text));
                 sd_logger_log_event(now, "trip_reset", text);
             }

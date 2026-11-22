@@ -71,6 +71,9 @@ static const char *TAG = "uds_client";
     DID_READ(prefix "_f18c", "Identification: " ecu " serial", tx, rx, 0xF18C)
 #define ECU_DTC_COUNT(prefix, ecu, tx, rx) \
     REQUEST(prefix "_dtc_count", "Fault counts: " ecu, tx, rx, 0x03, 0x19, 0x01, 0x09)
+// The page names the codes from PSA-RE's list for that ECU (tools/dtc_names.py).
+#define ECU_DTC_LIST(prefix, ecu, tx, rx) \
+    REQUEST(prefix "_dtc_list", "Fault lists: " ecu, tx, rx, 0x03, 0x19, 0x02, 0x09)
 #define MOTOR(name, label, did) DID_READ(name, "Motor: " label, 0x6A6, 0x686, did)
 #define OBC(name, label, did) DID_READ(name, "OBC: " label, 0x590, 0x58F, did)
 #define PARK_LOCK(name, label, did) DID_READ(name, "Park lock: " label, 0x5CA, 0x5AA, did)
@@ -165,6 +168,14 @@ static const uds_request_t requests[] = {
     ECU_DTC_COUNT("dae", "Steering", 0x6B5, 0x695),
     ECU_DTC_COUNT("eplu", "Park lock", 0x5CA, 0x5AA),
     ECU_DTC_COUNT("cvm", "Camera", 0x74A, 0x64A),
+
+    ECU_DTC_LIST("obc", "OBC", 0x590, 0x58F),
+    ECU_DTC_LIST("cmel", "Motor", 0x6A6, 0x686),
+    ECU_DTC_LIST("vcu", "VCU", 0x6A2, 0x682),
+    ECU_DTC_LIST("abs", "ABS", 0x6AD, 0x68D),
+    ECU_DTC_LIST("dae", "Steering", 0x6B5, 0x695),
+    ECU_DTC_LIST("eplu", "Park lock", 0x5CA, 0x5AA),
+    ECU_DTC_LIST("cvm", "Camera", 0x74A, 0x64A),
 
     // DC05 / DC06 next to the BMS's D816 / D815 tell the traction load from the auxiliaries (the 3A8 energy
     // counter came out ~18 % below 563 x 5C3 on 2026-11-20); DC5B pins down the scale of 208 b5 (torque).

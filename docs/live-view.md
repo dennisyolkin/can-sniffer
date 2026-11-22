@@ -64,7 +64,7 @@ Top bar, always visible: connection state, frames/s, **REC switch**, **Mark** bu
 
 | Tab | Content |
 |-----|---------|
-| Drive | Speed, SoC, power estimate (−dAh/dt × V from `563` and `5C3`) with a 60 s sparkline, **This trip** (energy regenerated / drawn / net with % recovered, km, Wh/km, drive cycles; counted on the board by `trip_energy.c` from the `3A8` counters, so it is complete while the phone sleeps; from power-up or Reset), gear / mode / ready, accelerator, brake pressure, torque, steering angle, camera speed limit, odometer. |
+| Drive | Speed, SoC, power estimate (−dAh/dt × V from `563` and `5C3`) with a 60 s sparkline, **This trip** (counted on the board by `trip_energy.c`, so it is complete while the phone sleeps; from power-up or Reset: driving energy regenerated / drawn / net from the `3A8` counters with % recovered, the battery's out / in / net from `563` × `5C3`, "climate & other" = the difference of the nets, km, Wh/km for both, drive cycles), gear / mode / ready, accelerator, brake pressure, torque, steering angle, camera speed limit, odometer. |
 | Battery | SoH capacity / resistance, voltage, remaining Ah, min / max cell and spread, 108-cell bar chart, 54 temperatures as a grid, insulation resistance. |
 | Car | Temperatures (outside, inverter, stator, DC/DC, evaporator, battery average), 12 V and DC/DC setpoint, doors (top-view SVG), locks, belts, lights, parking brake. |
 | Raw | Every ID: period, count, bytes; changed bytes flash. Plus logger health (drops, SD buffers, bus errors). |
@@ -166,7 +166,7 @@ fuse F1 `D86B`, insulation + / − `D87B`/`D87C` (kΩ), 30 s power limits `D872`
 BMS sees them, CAN fault record `D89E`, and the unnamed `F18C D900 E082 D416-D419 D41E-D423` (shown raw).
 
 Fault codes: each is 2 code bytes + a failure type byte + a status byte (ISO 14229). The page names them from
-PSA-RE's BMS list (embedded in `index.html` by `tools/bms_dtc_names.py`), explains the status bits (failing now,
+PSA-RE's list for that ECU (embedded in `index.html` by `tools/dtc_names.py`), explains the status bits (failing now,
 failed this drive, pending, confirmed, failed since last clear, warning lamp), and gives each fault Snapshot /
 Extended data buttons. The page parameter (the 3-byte DTC) is placed at a fixed position by `uds_client` and the
 finished frame is checked against the allowlist. The session buttons are red: `10 03` changes how the BMS
@@ -201,7 +201,8 @@ all".
 | Section | ECUs (request → reply) | DIDs |
 |---------|------------------------|------|
 | Identification | OBC `590`→`58F`, Motor (CMEL) `6A6`→`686`, VCU `6A2`→`682`, ABS `6AD`→`68D`, Steering (DAE) `6B5`→`695`, Park lock (EPLU) `5CA`→`5AA`, Camera (CVM) `74A`→`64A` | `F080` part number / supplier / additional reference (supplier names from PSA-RE), `F0FE` software, `F18C` serial (shown as hex + text). Same layout on all of them |
-| Fault counts | the same 7 | `19 01 09`; the page lists the count per ECU. Lists and records stay BMS-only (the DTC names are the BMS's) |
+| Fault counts | the same 7 | `19 01 09`; the page lists the count per ECU |
+| Fault lists | the same 7 | `19 02 09` (test failed now or confirmed); the page lists the codes per ECU, named from PSA-RE's list for that ECU (D34 variants: `E_VCU`, `ESPMK100_UDS`, `DAE_UDS`, `CVM_3`, …). Snapshot / extended data stay BMS-only |
 | Motor | CMEL | `DC00` speed (rpm), `DC5B` torque (×0.1 − 1638.3 Nm), `DCB6` / `DC69` torque variants (signed ×1/32, ×1/16 Nm), `DC05` / `DC06` battery current / voltage at the inverter (signed ×1/16 A, ×1/32 V), `DC02` coolant, `DC04` / `DC10` inverter, `DC70` stator, `DC71` rotor temperature (signed ×1/64 °C) |
 | OBC | OBC / DC-DC | `D824` / `D825` DC/DC input V / A (×0.2), `D828` / `D829` output V / A (2 B ×0.1 each, not PSA-RE's 1 B; checked 20261122), `D826` temperature, `D827` status, `D822` 12 V (×0.01), `D82B` / `D82C` mains V / A (×0.2), `D82D` cable, `D8AA` recharge status, `D8EB` charge level (×0.1 %) |
 | Park lock | EPLU | `D400` status, `D40C` activations, `D40E` activation errors (4 B counters), `D404` supply voltage (×0.001 V) |

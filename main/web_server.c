@@ -137,13 +137,15 @@ static size_t build_status(size_t clients) {
         ",\"rec\":\"%s\",\"session\":\"%s\",\"sd_dropped\":%" PRIu32 ",\"buffers_free\":%" PRIu32
         ",\"buffers\":%" PRIu32 ",\"marks\":%" PRIu32 ",\"can_mode\":\"%s\",\"bus_state\":\"%s\""
         ",\"trip\":{\"drawn_wh\":%" PRId32 ",\"regen_wh\":%" PRId32 ",\"net_wh\":%" PRId32 ",\"cycles\":%" PRIu32
-        ",\"gaps\":%" PRIu32 ",\"since_ms\":%" PRIu32 ",\"km_start\":%" PRId32 ",\"km_now\":%" PRId32 "}"
+        ",\"gaps\":%" PRIu32 ",\"since_ms\":%" PRIu32 ",\"km_start\":%" PRId32 ",\"km_now\":%" PRId32
+        ",\"bat_out_wh\":%" PRId32 ",\"bat_in_wh\":%" PRId32 ",\"bat_skips\":%" PRIu32 "}"
         ",\"clients\":%u,\"heap_free\":%u,\"heap_min\":%u}",
         (uint32_t) (esp_timer_get_time() / 1000), s.frames_per_s, s.frames_total, s.rx_dropped_total,
         s.bus_errors_total, s.bus_errors_per_s, recorder_names[s.recorder], s.session, s.sd_dropped,
         s.buffers_min_free, s.buffer_count, s.marks, s.can_mode ? s.can_mode : "",
         s.bus_state ? s.bus_state : "", s.trip.drawn_wh, s.trip.regen_wh, s.trip.net_wh, s.trip.cycles, s.trip.gaps,
-        (uint32_t) (s.trip.started_us / 1000), s.trip.km_start, s.trip.km_now, (unsigned) clients,
+        (uint32_t) (s.trip.started_us / 1000), s.trip.km_start, s.trip.km_now, s.trip.battery_out_wh,
+        s.trip.battery_in_wh, s.trip.battery_skips, (unsigned) clients,
         (unsigned) heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
         (unsigned) heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT));
     return len > 0 && len < (int) sizeof(status_buf) ? (size_t) len : 0;
