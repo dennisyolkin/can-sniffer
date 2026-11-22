@@ -893,8 +893,10 @@ const MOTOR_DIDS = {
 const OBC_DIDS = {
   0xD824: { n: "DC/DC input voltage", o: 0, l: 2, u: "V" },
   0xD825: { n: "DC/DC input current", o: 0, l: 1, f: 0.2, u: "A", d: 1 },
-  0xD828: { n: "DC/DC output voltage", o: 0, l: 1, f: 0.1, u: "V", d: 1 },
-  0xD829: { n: "DC/DC output current", o: 0, l: 1, u: "A" },
+  // 2 bytes, not PSA-RE's 1 (20261122: 0093 = 14.7 V, 00D6 = 21.4 A, 315 W out for 402 V × 0.8 A in).
+  0xD828: { n: "DC/DC output voltage", o: 0, l: 2, f: 0.1, u: "V", d: 1 },
+  0xD829: { n: "DC/DC output current", o: 0, l: 2, f: 0.1, u: "A", d: 1 },
+  // Same as 522 b0 − 40 (20261122: 69 °C both).
   0xD826: { n: "DC/DC temp", o: 0, l: 1, u: "°C" },
   0xD827: { n: "DC/DC status", o: 0, l: 1, e: ["off", "initialising", "standby", "converting", "ERROR", "damaged",
     "reserved", "not valid"] },

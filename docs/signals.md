@@ -23,6 +23,10 @@ Sources:
 - **bms-abc-2 / -3**: the same reads after an 88 km drive, 70.2 %, 25,920 km (two sessions a minute apart).
 - **trip-20261104** (2026-11-04): 35.5 min, 19 km at 8 °C, **100 % of frames**. First 118 s parked: all four windows
   down / a bit up / auto up (no Mark presses). TX mode; BMS Read all at the end (no fault-code reads).
+- **20261120-01 / -02** (2026-11-20): parked before and after a 19 km drive that was not recorded; ECU scan (8/63).
+- **20261122** (2026-11-22): 33.5 min, 19 km at ~5 °C, **100 % of frames**. ~5 min parked first: identification,
+  fault counts and the new OBC / motor / park lock reads, then windscreen demisting; climate on while driving, off
+  for the last ~10 min; fault counts again after parking.
 - **PSA-RE** ([github.com/prototux/PSA-RE](https://github.com/prototux/PSA-RE)): community database of PSA
   frames in YAML. The ë-C4 is car code `C41`, architecture `AEE2010.electric` (child of `.ev`, `.full`).
   Decode a capture with `tools/psare.py <session> <PSA-RE checkout>`; it resolves the variant chain.
@@ -59,7 +63,7 @@ with a 4-bit checksum + 4-bit process counter.
 | 583 | b3 bit 5 | "High battery temperature alert" | | doubtful | Set for the whole trip at 12 °C; probably mislabelled |
 | 522 | b4 | HV battery average temperature | raw − 40 °C | PSA-RE | 12 °C |
 | 454 | | **SoH capacity 91 %, SoH resistance 91 %**, main relay counter 6200, DC-charge relay counter 800, lifetime 11,375 Ah | | PSA-RE | Constant (sent ~1/s). SoH capacity matches BMS DID `D860` (90.94 %). Lifetime 11,375 Ah × ~390 V ≈ 4.4 MWh over 25,832 km ≈ 170 Wh/km: plausible as lifetime discharge |
-| 3A8 | b0, b1, b2 | Energy counters since the start of the drive cycle, 1 byte each, wrapping: **b0 = net, b1 = drawn (only rises), b2 = regenerated (counts down)**; b0 = b1 − regen. Every 0.5 s. **Reset to 0 / 0 / 254 at each drive cycle** (trip-20261104: at ready, 108 s, and at the wake-up at 2051 s) | **1 Wh per unit, 2 Wh steps** (all values even; PSA-RE's "×2 Wh" is the step) | verified | trip-20261104 (complete, resets skipped): drawn 3,694 / regen 704 / net 2,988 Wh vs 563 × 5C3 3.82 / 0.76 / 3.06 kWh; SoC 58 → 51 % fits. **19.1 % recovered** (≈ 1/3 below 30 km/h, 1/8 above 60), peak regen 46 kW (5 s average; per frame the resolution is 14.4 kW). trip1's 23 % is the same order; its kWh were off because 83 % of frames were lost. Only the low byte is sent, so a trip total needs every frame: a gap over 256 Wh (~20 s at 46 kW) loses whole wraps. **2026-11-20 (drive not recorded; board totals at the after-trip session):** net 2,528 Wh (drawn 3,228, regen 696, 19 km) vs `563` 44.12 → 36.25 Ah × ~391 V ≈ 3.08 kWh and SoC 40.0 → 32.9 % (1.105 Ah per %, the same as on 11-04): 3A8 ~18 % low this time. Parked, both agree (~0.2 kW). Open: cabin heating not counted (4-5 °C vs 8.5 °C on 11-04), or two lost wraps (512 Wh fits almost exactly, but the board logged gaps=0). Next: record a whole drive, or park in Ready with the heater on / off; CMEL `DC05`/`DC06` vs BMS `D816` |
+| 3A8 | b0, b1, b2 | Energy counters since the start of the drive cycle, 1 byte each, wrapping: **b0 = net, b1 = drawn (only rises), b2 = regenerated (counts down)**; b0 = b1 − regen. Every 0.5 s. **Reset to 0 / 0 / 254 at each drive cycle** (trip-20261104: at ready, 108 s, and at the wake-up at 2051 s) | **1 Wh per unit, 2 Wh steps** (all values even; PSA-RE's "×2 Wh" is the step) | verified | trip-20261104 (complete, resets skipped): drawn 3,694 / regen 704 / net 2,988 Wh vs 563 × 5C3 3.82 / 0.76 / 3.06 kWh; SoC 58 → 51 % fits. **19.1 % recovered** (≈ 1/3 below 30 km/h, 1/8 above 60), peak regen 46 kW (5 s average; per frame the resolution is 14.4 kW). trip1's 23 % is the same order; its kWh were off because 83 % of frames were lost. Only the low byte is sent, so a trip total needs every frame: a gap over 256 Wh (~20 s at 46 kW) loses whole wraps. **2026-11-20 (drive not recorded; board totals at the after-trip session):** net 2,528 Wh (drawn 3,228, regen 696, 19 km) vs `563` 44.12 → 36.25 Ah × ~391 V ≈ 3.08 kWh and SoC 40.0 → 32.9 % (1.105 Ah per %, the same as on 11-04): 3A8 ~18 % low this time. Parked, both agree (~0.2 kW). Open: cabin heating not counted (4-5 °C vs 8.5 °C on 11-04), or two lost wraps (512 Wh fits almost exactly, but the board logged gaps=0). Next: record a whole drive, or park in Ready with the heater on / off; CMEL `DC05`/`DC06` vs BMS `D816`. **Answered by 20261122 (whole drive recorded): 3A8 leaves out the climate system.** Net 2,840 Wh vs 563 × 5C3 3.63 kWh (9.20 Ah, SoC 59.25 → 50.9 %, 1.10 Ah per % as before). The gap per minute: 0.0-0.2 kW parked, **7.5 kW** while demisting, 2.8-3.6 kW early in the drive and 1.1-1.8 kW later with climate on, ~0.4 kW in the last ~8 min with climate off. PSA-RE's comment ("motor and electronic components, climate control…") doesn't fit here. So 3A8 is traction + DC/DC: the 2026-11-04 drive (no heating, 2.4 % gap) and the 11-20 one (18 %) fit. Its regen (686 Wh, 19.4 %) is the motor's; 563 shows less (0.56 kWh) because the heating ran during regen too |
 | 462 | | Charge mode, fast-charge stop request | enum | PSA-RE | "No load" while driving |
 
 ## Traction battery over UDS (BMS diagnostics)
@@ -162,6 +166,56 @@ The first one's leading 96.25 does not fit a simple oldest-to-newest order (a ri
 The rest of D465 is mostly 16- and 32-bit counters (many end in `00`, so possibly little-endian), candidates for
 histograms (time per temperature or SoC band) or event counters. To decode: read it again after a drive or a
 charge and see which fields move.
+
+## Other ECUs over UDS (20261122)
+
+The 7 other ECUs the scan found, parked in Ready. Identification (`F080` / `F0FE` / `F18C`, multi-frame, same layout
+everywhere; supplier names from PSA-RE's code list):
+
+| ECU | Part number | Supplier | Software ref. / edition | Downloads, date | Serial (`F18C`, ASCII) |
+|-----|-------------|----------|-------------------------|-----------------|------------------------|
+| OBC / DC-DC `590` | 9843465980 | `0x19` (PSA-RE: BEHR; doubtful) | 953599 / 5632 | 0, 12-05-22 | 00000000000000280566 |
+| Motor (CMEL) `6A6` | 9841696280 | Continental | 954627 / 5377 | 1, — | 220311053800 |
+| VCU `6A2` | 9843252980 | Continental | 959609 / 45569 | **2, 05-09-23**: reflashed once, probably at a dealer | 9220912252 |
+| ABS / ESP `6AD` | 9842417680 (extra 9824311280) | Bosch | 951744 / 4705 | 1, — | 085135707749220528 |
+| Steering (DAE) `6B5` | 9844551780 (extra 9834578780) | JTEKT | 950273 / 65290 | 1, — | 0021652941127 |
+| Camera (CVM) `74A` | 9817137180 (extra 9842725080) | TRW | 949218 / 28929 | 1, — | 00000358 |
+| Park lock (EPLU) `5CA` | 98426… (first frame only) | | | | |
+
+Dates are BCD DDMMYY as PSA-RE gives them (`FFFFFF` = none). The park lock sent the first frame of `F080` and then
+nothing at all for the rest of the capture: no consecutive frames after our flow control (sent 0.5 ms later), no
+reply to its other reads or its fault count, and `5AA` appears only that once in 33 min. It answered TesterPresent
+on 2026-11-20. Unknown whether it went to sleep or our flow control upset it; try TesterPresent first next time and
+leave its multi-frame reads alone until that is understood.
+
+Fault counts (`19 01 09`: test failed now or confirmed), the same before and after the drive where the ECU answered:
+
+| ECU | Count | Notes |
+|-----|-------|-------|
+| OBC | 4 | |
+| Motor | 5 | Answers `7F 19 78` (response pending) first; DTC format 00 (ISO 15031-6), the others 01 (ISO 14229) |
+| VCU | 1 | Silent after parking (asleep) |
+| ABS | 0 | Three "response pending" before the answer |
+| Steering | 1 | Availability mask `7F` |
+| Camera | 3 | Availability mask `89` |
+| Park lock | — | Silent (above) |
+
+The codes themselves need `19 02` per ECU (PSA-RE has DTC lists for all of them except the ABS variants).
+
+Live values, checked against the broadcast at the same moment (parked, Ready, DC/DC converting):
+
+| ECU | DID | Value | Check |
+|-----|-----|-------|-------|
+| OBC | D824 / D825 | 402 V / 0.8 A in (322 W) | |
+| OBC | D828 / D829 | 14.7 V / 21.4 A out (315 W) | 2 B × 0.1 each, not PSA-RE's 1 B; 98 % of the input power |
+| OBC | D826 | 69 °C | = `522` b0 − 40 |
+| OBC | D827 / D82D / D8AA | converting / cable disconnected / "not available" | |
+| OBC | D822 | 14.80 V | |
+| OBC | D82B / D82C | 0 V / 0 A (not plugged in) | |
+| OBC | D8EB | 59.2 % | = SoC (`3A8` 59.1 %) |
+| Motor | DC00 / DC5B / DCB6 / DC69 / DC05 | 0 rpm / 0.0 Nm (`3FFF`) / 0 / 0 / 0 A | parked; DC5B while driving still to do |
+| Motor | DC06 | 404.7 V | = `5C3` 404 V |
+| Motor | DC02 / DC04 / DC10 / DC70 / DC71 | 28.8 / 28.8 / 28.8 / 29.5 / 27.8 °C | `5C1` inverter 29, stator 29 |
 
 ## Driving
 
