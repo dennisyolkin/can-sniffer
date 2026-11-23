@@ -9,6 +9,11 @@ hex (what the ECU sends), and "_ftb" the failure types shared by all of that ECU
 
 Variants: the ones PSA-RE lists for D34 (DS 3 Crossback E-Tense), the e-CMP car closest to the ë-C4. PSA-RE has no
 ë-C4 entry; the BMS list fitted every code the car returned so far.
+
+Network codes (U, "lost communication with <ECU>") name the other ECU, so they mean the same in every list. A U code
+missing from an ECU's own list is borrowed from the first of the other lists that has it (the motor's U11A0 / U110E /
+U114A on 2026-11-23). They go once into "_net" ({"<raw>": [code, name, {failure types}, "<source ECU>"]}), which
+the page falls back to and marks as borrowed.
 """
 
 import argparse
@@ -49,6 +54,20 @@ def ecu_table(path: Path) -> dict[str, object]:
     return table
 
 
+def is_network(raw: str) -> bool:
+    return int(raw[0], 16) >> 2 == 3
+
+
+def network_codes(tables: dict[str, dict[str, object]]) -> dict[str, list[object]]:
+    """U codes, first list in VARIANTS order wins: {"<raw>": ["U115E", "name", {failure types}, "<source ECU>"]}."""
+    shared: dict[str, list[object]] = {}
+    for ecu, table in tables.items():
+        for raw, entry in table.items():
+            if raw != "_ftb" and is_network(raw) and raw not in shared:
+                shared[raw] = [*entry, ecu]
+    return shared
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("psa_re")
@@ -57,6 +76,9 @@ def main() -> None:
 
     tables = {ecu: ecu_table(Path(args.psa_re) / "diag/AEE2010.ev" / variant / "dtcs.yml")
               for ecu, variant in VARIANTS.items()}
+    counts = ", ".join(f"{ecu} {len(t) - 1}" for ecu, t in tables.items())
+    shared = network_codes(tables)
+    tables["_net"] = shared
     page = Path(args.page)
     text = page.read_text()
     blob = json.dumps(tables, ensure_ascii=False, separators=(",", ":"))
@@ -64,8 +86,7 @@ def main() -> None:
     if count != 1:
         raise SystemExit(f"{page}: expected one dtcs block, found {count}")
     page.write_text(new)
-    counts = ", ".join(f"{ecu} {len(t) - 1}" for ecu, t in tables.items())
-    print(f"{page}: {counts} fault codes, {len(blob)} bytes")
+    print(f"{page}: {counts} fault codes, {len(shared)} network codes shared, {len(blob)} bytes")
 
 
 if __name__ == "__main__":

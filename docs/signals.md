@@ -27,6 +27,8 @@ Sources:
 - **20261122** (2026-11-22): 33.5 min, 19 km at ~5 °C, **100 % of frames**. ~5 min parked first: identification,
   fault counts and the new OBC / motor / park lock reads, then windscreen demisting; climate on while driving, off
   for the last ~10 min; fault counts again after parking.
+- **20261123-fault-codes** (2026-11-23): 110 s parked in Ready, TX mode: park lock reads, fault lists (`19 02 09`)
+  from the 7 ECUs twice, fault counts once.
 - **PSA-RE** ([github.com/prototux/PSA-RE](https://github.com/prototux/PSA-RE)): community database of PSA
   frames in YAML. The ë-C4 is car code `C41`, architecture `AEE2010.electric` (child of `.ev`, `.full`).
   Decode a capture with `tools/psare.py <session> <PSA-RE checkout>`; it resolves the variant chain.
@@ -186,7 +188,8 @@ Dates are BCD DDMMYY as PSA-RE gives them (`FFFFFF` = none). The park lock sent 
 nothing at all for the rest of the capture: no consecutive frames after our flow control (sent 0.5 ms later), no
 reply to its other reads or its fault count, and `5AA` appears only that once in 33 min. It answered TesterPresent
 on 2026-11-20. Unknown whether it went to sleep or our flow control upset it; try TesterPresent first next time and
-leave its multi-frame reads alone until that is understood.
+leave its multi-frame reads alone until that is understood. On 2026-11-23 it answered everything asked (single-frame
+reads and fault codes, twice each, ~2 ms per reply); its multi-frame reads were not tried.
 
 Fault counts (`19 01 09`: test failed now or confirmed), the same before and after the drive where the ECU answered:
 
@@ -198,9 +201,52 @@ Fault counts (`19 01 09`: test failed now or confirmed), the same before and aft
 | ABS | 0 | Three "response pending" before the answer |
 | Steering | 1 | Availability mask `7F` |
 | Camera | 3 | Availability mask `89` |
-| Park lock | — | Silent (above) |
+| Park lock | — | Silent (above); 1 on 2026-11-23 |
 
 The codes themselves need `19 02` per ECU (PSA-RE has DTC lists for all of them except the ABS variants).
+
+Fault lists (`19 02 09`, 20261123-fault-codes), identical in both reads and matching the counts. Code = 2 bytes +
+failure type; names from PSA-RE (the page's variant first, then another `AEE2010.ev` ECU with the same code, marked *).
+Status bits: F = test failed (at the last test), P = pending, C = confirmed, S = failed since last clear,
+N = test not completed this drive, W = warning lamp requested.
+
+| ECU | Code | Status | PSA-RE name |
+|-----|------|--------|-------------|
+| OBC | P10E6-86, P10E6-81, P10E6-89 | `6D` F P C S N | not in PSA-RE |
+| OBC | P1A71-93 | `6D` F P C S N | not in PSA-RE |
+| Motor | U0167-87 | `28` C S | Communication with the BSI: missing information |
+| Motor | U11A0-87 | `28` C S | *Traction battery ECU (CAN): missing information (OBC_DCDC_ECMP, MCU_PHEV) |
+| Motor | U110E-87 | `28` C S | *OBC / DC-DC signal: missing information (E_VCU) |
+| Motor | U114A-87 | `28` C S | *Electric drive train supervisor (VCU, CAN): missing information (EPLU, BMU_CTE1) |
+| Motor | U1537-08 | `28` C S | not in PSA-RE |
+| VCU | P0C46-25 | `28` C S | Traction battery cells: non-coherent variation of the signal |
+| ABS | — | | no codes (availability mask `FF`) |
+| Steering | C120D-A2 | `28` C S | not in DAE_UDS; A2 = "Under voltage" |
+| Park lock | U115E-87 | `28` C S | Electric machine management ECU (CAN): missing information |
+| Camera | U1F00-00 | `89` F C W | Event not recorded (fault log overflowed) |
+| Camera | U1208-29 | `89` F C W | Communication with the engine management ECU: data received invalid |
+| Camera | B1238-00 | `08` C | Field of vision of the camera: hindering object detected |
+
+Reading:
+- **Nothing is failing in the drive train now.** Motor, VCU, steering and park lock hold only old, confirmed
+  faults (`28`: not failed at the last test, not pending). The BMS has none (2026-11-01) and the ABS has none.
+- The motor's four U codes (lost BSI, battery ECU, OBC/DC-DC and VCU), the park lock's lost motor ECU and the
+  steering's under voltage look like **one event**: a 12 V dip, a 12 V battery disconnect or the VCU reflash
+  (2023-09-05) would make every ECU lose the others at once. Unproven; the snapshot / extended data (`19 04` /
+  `19 06`, buttons on each fault) usually hold the odometer and an occurrence counter.
+- **OBC:** four faults that are *pending* and still flagged failed, with "not completed this drive": they failed at
+  the OBC's last test, which is a charging function not run since (not plugged in). So they come from a recent charge
+  (the last charge or the one before). Charging works, so probably a charge interrupted or refused by the wallbox;
+  read their snapshots next time, and read the list again right after a normal charge to see whether they clear.
+- **Camera:** U1208 (engine ECU data invalid) is failing now with the warning bit; on an EV there is no engine ECU,
+  so this is probably a permanent configuration artefact of the shared camera software, not a real fault. U1F00
+  only says the camera's own fault log overflowed. B1238 = windscreen blocked once (dirt, frost).
+- **VCU P0C46-25** (battery cells, signal changed implausibly) is the only stored code about the battery. Old and
+  not repeated; the BMS itself has no codes.
+
+Park lock reads on 2026-11-23 (parked in P, Ready): D400 status `00` = locked; D40C activations `1D7F` = 7,551;
+D40E activation errors `FFFFFFFC` (probably "not available", not a count); D404 supply 14.81 / 14.82 V (= the DC/DC
+output, 14.80 V on 11-22).
 
 Live values, checked against the broadcast at the same moment (parked, Ready, DC/DC converting):
 

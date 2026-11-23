@@ -166,7 +166,8 @@ fuse F1 `D86B`, insulation + / − `D87B`/`D87C` (kΩ), 30 s power limits `D872`
 BMS sees them, CAN fault record `D89E`, and the unnamed `F18C D900 E082 D416-D419 D41E-D423` (shown raw).
 
 Fault codes: each is 2 code bytes + a failure type byte + a status byte (ISO 14229). The page names them from
-PSA-RE's list for that ECU (embedded in `index.html` by `tools/dtc_names.py`), explains the status bits (failing now,
+PSA-RE's list for that ECU (embedded in `index.html` by `tools/dtc_names.py`; a network U code missing there is
+named from another of the 8 lists, marked "from the … list"), explains the status bits (failing now,
 failed this drive, pending, confirmed, failed since last clear, warning lamp), and gives each fault Snapshot /
 Extended data buttons. The page parameter (the 3-byte DTC) is placed at a fixed position by `uds_client` and the
 finished frame is checked against the allowlist. The session buttons are red: `10 03` changes how the BMS
