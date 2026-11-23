@@ -6,8 +6,9 @@ the user asks for that specific action (CLAUDE.md, "Hard rules"). Sources: PSA-R
 
 What is implemented and read-only: `3E` TesterPresent, `22` ReadDataByIdentifier, `19` ReadDTCInformation
 (`01`/`02`/`04`/`06`), and `10` DiagnosticSessionControl limited to `01` default / `03` extended (red buttons).
+Implemented and not read-only: `14 FF FF FF` (below), since 2026-11-23 at the user's request.
 
-## Clear fault codes: `14` ClearDiagnosticInformation
+## Clear fault codes: `14` ClearDiagnosticInformation (implemented, all groups only)
 
 | | |
 |---|---|
@@ -22,7 +23,13 @@ The most likely one to be wanted (after a repair, or to see whether a fault come
 - A fault that is still present comes back as soon as the ECU tests it again; clearing does not repair anything.
 - On some ECUs it also resets learned values or readiness flags.
 
-To add it: an allowlist case for `0x14` with exactly `FF FF FF`, a red button, and a confirmation on the page.
+Implemented that way (2026-11-23): `<prefix>_dtc_clear` for all 8 ECUs, the page sends the group `FFFFFF` as the
+request's parameter, and `allowed()` accepts nothing else, so one group or one DTC can't be cleared. The red "Clear
+faults" button sits next to an ECU's fault list (so it appears only after the list was read) and always asks first;
+if any listed fault's snapshot or extended data hasn't been read on that page, it lists them and wants the ECU's name
+typed. Not tried on the car yet: whether each ECU accepts it in the default session (else `7F 14 7F` / `22`; the
+page only offers the extended session for the BMS). Faults outside the list's mask `09` (e.g. only pending) are not
+shown, so they go without their records being offered.
 
 ## Write a DID: `2E` WriteDataByIdentifier
 

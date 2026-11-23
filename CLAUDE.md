@@ -38,8 +38,9 @@ Standalone CAN bus logger built on a LilyGO T-CAN485 (ESP32) plugged into the ca
   (`CONFIG_CAN_TX_MODE`, **the default image since 2026-11-21**, at the user's request): normal mode (ACKs every
   frame), nothing sent unless a page button asks for it, and `uds_client` sends only its fixed,
   allowlisted requests (UDS `0x3E`/`0x22`/`0x19`, `0x10` default/extended session only, OBD-II mode `01`, on
-  diagnostic IDs that never appear in the car's traffic). Services that write, clear, reset, unlock or program
-  (`0x2E 0x14 0x11 0x27 0x31`, `10 02`) are documented in [docs/uds-write-services.md](docs/uds-write-services.md)
+  diagnostic IDs that never appear in the car's traffic), plus `14 FF FF FF` (clear all fault codes of one ECU, added at
+  the user's request on 2026-11-23; red button under that ECU's fault list, behind a confirmation). Services that
+  write, reset, unlock or program (`0x2E 0x11 0x27 0x31`, `10 02`, `0x14` for anything but group `FFFFFF`) are documented in [docs/uds-write-services.md](docs/uds-write-services.md)
   and stay out unless the user asks for that specific action. Never send on an ID the car itself uses. Keep the
   option and the listen-only image working (`-D LISTEN_ONLY_BUILD=1`, see Build).
 - Don't add console output to the hot path (ISR, RX, SD writing). Logging during init or errors is
@@ -123,7 +124,7 @@ TWAI ISR (on_rx_done) ──► ring of rx_slot_t + counting semaphores ──�
 | [main/wifi_ap.c](main/wifi_ap.c) / [.h](main/wifi_ap.h) | NVS, netif, SoftAP (menuconfig → Live view Wi-Fi; password in `sdkconfig.secrets`), mDNS `can-sniffer.local`. |
 | [main/web_server.c](main/web_server.c) / [.h](main/web_server.h) | httpd on core 1: `GET /` serves [main/web/index.html](main/web/index.html) (gzipped at build time), `/ws` pushes the frame table (binary, 5 Hz) and status (JSON, 1 Hz) and takes `rec on`/`rec off`/`mark <label>`. |
 | [main/web/index.html](main/web/index.html) | The page: no frameworks. Its signal table (JSON, PSA-RE bit notation) is the decoding for the live view; check it with `tools/check_page_signals.py`. |
-| [main/uds_client.c](main/uds_client.c) / [.h](main/uds_client.h) | TX mode only (`CONFIG_CAN_TX_MODE`, the default; not compiled in a listen-only image): a fixed list of single-frame diagnostic requests sent one at a time from the page, fault codes (`0x19`: counts, lists, snapshot / extended data per fault) and session control (`0x10`, red on the page), an ECU scan (TesterPresent to the 63 PSA-RE address pairs in `ecus[]`), reply collection with ISO-TP reassembly (flow control only in answer to a first frame from the ECU just asked; replies up to 512 B), page log and `uds_*` events. See [docs/live-view.md](docs/live-view.md). |
+| [main/uds_client.c](main/uds_client.c) / [.h](main/uds_client.h) | TX mode only (`CONFIG_CAN_TX_MODE`, the default; not compiled in a listen-only image): a fixed list of single-frame diagnostic requests sent one at a time from the page, fault codes (`0x19`: counts, lists, snapshot / extended data per fault; `0x14` clear all, red) and session control (`0x10`, red on the page), an ECU scan (TesterPresent to the 63 PSA-RE address pairs in `ecus[]`), reply collection with ISO-TP reassembly (flow control only in answer to a first frame from the ECU just asked; replies up to 512 B), page log and `uds_*` events. See [docs/live-view.md](docs/live-view.md). |
 | [main/trip_energy.c](main/trip_energy.c) / [.h](main/trip_energy.h) | Energy since power-up or the page's Reset, two ways, on every frame in the logger loop: drawn / regenerated / net from the car's `3A8` counters (wrap and drive-cycle reset handling; traction and 12 V, **not the climate system**), and out of / into the battery from `563` remaining Ah × `5C3` voltage (everything; 1 Ah glitches skipped). Plus the odometer at the start. Goes out in the status and to `events.csv`. |
 | [main/status_led.c](main/status_led.c) / [.h](main/status_led.h) | WS2812 status LED: `set`, timed `show_for` with a FreeRTOS one-shot timer, a "priority" flag that blocks other updates. |
 

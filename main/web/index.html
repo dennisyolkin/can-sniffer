@@ -1045,10 +1045,12 @@ function dtcEntry(b0, b1, ftb, status, ecu) {
   const name = own ? own[1] : borrowed ? `${borrowed[1]} (from the ${borrowed[3]} list)` : "not in PSA-RE";
   const bits = DTC_STATUS.filter(([bit]) => status & (1 << bit)).map(([, text]) => text);
   return { raw, code, name, failure, status: bits.join(", ") || "no status bits",
-    statusByte: status, hexParam: raw + hex(ftb) };
+    statusByte: status, ftb: hex(ftb), hexParam: raw + hex(ftb) };
 }
 
 const dtcLists = new Map();  // reply ID → { t, items } from the latest 59 02
+const dtcCleared = new Map();  // reply ID → board ms of the latest 54 (faults cleared)
+const recordKey = (ecu, e, kind) => `${ecu} ${e.code}-${e.ftb} ${kind}`;
 const dtcCounts = new Map();  // reply ID → { t, n } from the latest 59 01
 let session = null;    // { t, type, p2, p2star } from the latest 50 xx
 
@@ -1057,6 +1059,7 @@ function describeUds(p) {
   if (p[0] === 0x59 && p[1] === 0x01 && p.length >= 6) return `fault count = ${(p[4] << 8) | p[5]}`;
   if (p[0] === 0x59 && p[1] === 0x02) return `${Math.floor((p.length - 3) / 4)} fault code(s)`;
   if (p[0] === 0x59 && (p[1] === 0x04 || p[1] === 0x06)) return `${p[1] === 4 ? "snapshot" : "extended data"}, ${p.length} bytes`;
+  if (p[0] === 0x54) return "fault codes cleared";
   if (p[0] === 0x50) return `session ${SESSIONS[p[1]] || hex(p[1])}`;
   return null;
 }
@@ -1086,8 +1089,10 @@ function handlePayload(p, t, id) {
     }
   } else if (p[0] === 0x59 && (p[1] === 0x04 || p[1] === 0x06) && p.length >= 6) {
     const ecu = ECUS[id] || hex(id, 3), e = dtcEntry(p[2], p[3], p[4], p[5], ecu);
-    udsMessages.set(`${ecu} ${e.code}-${hex(p[4])} ${p[1] === 4 ? "snapshot" : "extended"}`,
+    udsMessages.set(recordKey(ecu, e, p[1] === 4 ? "snapshot" : "extended"),
       { name: `${e.name} (${e.failure})`, bytes: p.slice(6), t });
+  } else if (p[0] === 0x54) {
+    if (!(dtcCleared.get(id) > t)) dtcCleared.set(id, t);
   } else if (id !== BMS_RX) {
     // Sessions are only requested from the BMS.
   } else if (p[0] === 0x50 && p.length >= 2 && newer(session, t)) {
@@ -1180,8 +1185,32 @@ function toggleReadAll(names, group) {
 }
 
 // Reply ID → uds_client's request name prefix, for the per-fault Snapshot / Extended data buttons.
+// Also the prefix of "<prefix>_dtc_clear" (every ECU, the park lock too).
 const DTC_RECORD_PREFIX = { 0x694: "bms", 0x58F: "obc", 0x686: "cmel", 0x682: "vcu", 0x68D: "abs", 0x695: "dae",
-  0x64A: "cvm" };
+  0x64A: "cvm", 0x5AA: "eplu" };
+const hasRequest = name => !!uds && uds.requests.some(r => r.name === name);
+
+// Clearing deletes the codes with their snapshot / extended data, so it asks first, and makes you type the ECU's
+// name when a listed fault's records were not read on this page (or the ECU has none to give).
+function clearFaults(id, ecu, list) {
+  const missing = [];
+  for (const e of list.items) {
+    for (const kind of ["snapshot", "extended"]) {
+      if (!udsMessages.has(recordKey(ecu, e, kind))) missing.push(`${e.code}-${e.ftb} ${kind}`);
+    }
+  }
+  const text = `Clear ALL fault codes in the ${ecu} (UDS 14 FF FF FF)?\n\n` +
+    `This deletes ${list.items.length} listed code(s) with their snapshot and extended data. ` +
+    "A fault that is still present comes back at the ECU's next test.";
+  if (!missing.length) {
+    if (!confirm(text)) return;
+  } else {
+    const typed = prompt(`${text}\n\nNot read yet (or not stored): ${missing.join(", ")}.\n\n` +
+      `Type ${ecu} to clear anyway.`);
+    if (typed === null || typed.trim().toLowerCase() !== ecu.toLowerCase()) return;
+  }
+  send(`uds ${DTC_RECORD_PREFIX[id]}_dtc_clear FFFFFF`);
+}
 
 function renderDtcs(online) {
   const box = $("#uds-dtcs");
@@ -1204,8 +1233,20 @@ function renderDtcs(online) {
     const ecu = ECUS[id] || hex(id, 3);
     const h = document.createElement("div");
     h.className = "ecu";
+    const cleared = dtcCleared.get(id);
     h.textContent = `${ecu} faults: ` + (list.items.length ? `${list.items.length}` : "none") +
-      ` (${(list.t / 1000).toFixed(0)} s)`;
+      ` (${(list.t / 1000).toFixed(0)} s)` +
+      (cleared > list.t ? ` · cleared at ${(cleared / 1000).toFixed(0)} s, read the list again` : "");
+    const clearName = `${DTC_RECORD_PREFIX[id]}_dtc_clear`;
+    if (hasRequest(clearName)) {
+      const b = document.createElement("button");
+      b.className = "danger";
+      b.textContent = "Clear faults";
+      b.title = "UDS 14 FF FF FF: deletes every fault code in this ECU";
+      b.disabled = !online || udsBusy() || !!readAll;
+      b.onclick = () => clearFaults(id, ecu, list);
+      h.append(" ", b);
+    }
     rows.push(h);
     for (const e of list.items) {
       const d = document.createElement("div");
@@ -1220,7 +1261,7 @@ function renderDtcs(online) {
       // Snapshot / extended data, where uds_client has them for this ECU (not the park lock).
       const prefix = DTC_RECORD_PREFIX[id];
       const records = [[`${prefix}_dtc_snapshot`, "Snapshot"], [`${prefix}_dtc_extended`, "Extended data"]]
-        .filter(([name]) => prefix && uds && uds.requests.some(r => r.name === name));
+        .filter(([name]) => prefix && hasRequest(name));
       for (const [name, label] of records) {
         const b = document.createElement("button");
         b.textContent = label;
@@ -1307,7 +1348,7 @@ function renderUds() {
         all.onclick = () => toggleReadAll(reads, group);
         btns.append(all);
       }
-      // Requests with a parameter (DTC snapshot / extended data) are sent from the fault list instead.
+      // Requests with a parameter (DTC snapshot / extended data, clear faults) are sent from the fault list instead.
       for (const r of reqs.filter(r => !r.param)) {
         const b = document.createElement("button");
         b.textContent = r.text;

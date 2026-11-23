@@ -57,6 +57,13 @@ static const char *TAG = "uds_client";
      .data = {0x06, 0x19, subfunction, 0, 0, 0, 0xFF}, .param_offset = 3, .param_len = 3}
 #define BMS_DTC_RECORD(req_name, req_label, subfunction) \
     DTC_RECORD(req_name, "BMS faults: " req_label, 0x6B4, 0x694, subfunction)
+// ClearDiagnosticInformation, all groups (at the user's request, 2026-11-23). The page sends the group FFFFFF as the
+// parameter, so the request never appears among the plain buttons, only under that ECU's fault list behind a
+// confirmation; allowed() accepts nothing but FFFFFF. Clearing deletes the snapshot and extended data with the codes.
+#define DTC_CLEAR(req_name, req_label, tx, rx) \
+    {.name = req_name, .label = req_label, .tx_id = tx, .rx_id_min = rx, .rx_id_max = rx, \
+     .data = {0x04, 0x14, 0, 0, 0}, .param_offset = 2, .param_len = 3, .danger = true}
+#define ECU_DTC_CLEAR(prefix, ecu, tx, rx) DTC_CLEAR(prefix "_dtc_clear", "Clear faults: " ecu, tx, rx)
 // DiagnosticSessionControl: shown in red on the page.
 #define BMS_SESSION(req_name, req_label, session) \
     {.name = req_name, .label = "BMS session: " req_label, .tx_id = 0x6B4, .rx_id_min = 0x694, .rx_id_max = 0x694, \
@@ -155,6 +162,7 @@ static const uds_request_t requests[] = {
     BMS_DTC("bms_dtc_history", "History", 0x03, 0x19, 0x02, 0x2D),
     BMS_DTC_RECORD("bms_dtc_snapshot", "Snapshot", 0x04),
     BMS_DTC_RECORD("bms_dtc_extended", "Extended data", 0x06),
+    ECU_DTC_CLEAR("bms", "BMS", 0x6B4, 0x694),
 
     // The ECU falls back to the default session ~5 s after the last request (S3 timer) unless TesterPresent keeps
     // the extended one open. Never the programming session (0x02).
@@ -191,6 +199,14 @@ static const uds_request_t requests[] = {
     ECU_DTC_RECORDS("abs", "ABS", 0x6AD, 0x68D),
     ECU_DTC_RECORDS("dae", "Steering", 0x6B5, 0x695),
     ECU_DTC_RECORDS("cvm", "Camera", 0x74A, 0x64A),
+
+    ECU_DTC_CLEAR("obc", "OBC", 0x590, 0x58F),
+    ECU_DTC_CLEAR("cmel", "Motor", 0x6A6, 0x686),
+    ECU_DTC_CLEAR("vcu", "VCU", 0x6A2, 0x682),
+    ECU_DTC_CLEAR("abs", "ABS", 0x6AD, 0x68D),
+    ECU_DTC_CLEAR("dae", "Steering", 0x6B5, 0x695),
+    ECU_DTC_CLEAR("eplu", "Park lock", 0x5CA, 0x5AA),
+    ECU_DTC_CLEAR("cvm", "Camera", 0x74A, 0x64A),
 
     // DC05 / DC06 next to the BMS's D816 / D815 tell the traction load from the auxiliaries (the 3A8 energy
     // counter came out ~18 % below 563 x 5C3 on 2026-11-20); DC5B pins down the scale of 208 b5 (torque).
@@ -375,7 +391,8 @@ static unsigned log_count;
 static uint32_t log_seq;
 static uds_message_t message;
 
-// Nothing that writes, resets, unlocks or programs the ECU; single frames only. Checked in C on the exact frame
+// Nothing that writes, resets, unlocks or programs the ECU, except clearing all fault codes (0x14, asked for by the
+// user); single frames only. Checked in C on the exact frame
 // that goes out (after the page's parameter is filled in), so neither the table nor the page can slip past it.
 static bool allowed(uint16_t id, const uint8_t *data) {
     uint8_t len = data[0];
@@ -392,6 +409,8 @@ static bool allowed(uint16_t id, const uint8_t *data) {
             return len == 3;
         }
         return (data[2] == 0x04 || data[2] == 0x06) && len == 6;
+    case 0x14:  // ClearDiagnosticInformation: all groups only (FFFFFF), never one group or one DTC.
+        return len == 4 && data[2] == 0xFF && data[3] == 0xFF && data[4] == 0xFF;
     case 0x10:  // DiagnosticSessionControl: default or extended session; never programming (0x02).
         return len == 2 && (data[2] == 0x01 || data[2] == 0x03);
     case 0x01:  // OBD-II current data, functional or physical request.
