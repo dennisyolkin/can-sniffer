@@ -213,7 +213,7 @@ N = test not completed this drive, W = warning lamp requested.
 | ECU | Code | Status | PSA-RE name |
 |-----|------|--------|-------------|
 | OBC | P10E6-86, P10E6-81, P10E6-89 | `6D` F P C S N | not in PSA-RE |
-| OBC | P1A71-93 | `6D` F P C S N | not in PSA-RE |
+| OBC | P1A71-93 | `6D` F P C S N | not in PSA-RE; online: "integrated charger / DC converter unit: internal fault" (below) |
 | Motor | U0167-87 | `28` C S | Communication with the BSI: missing information |
 | Motor | U11A0-87 | `28` C S | *Traction battery ECU (CAN): missing information (OBC_DCDC_ECMP, MCU_PHEV) |
 | Motor | U110E-87 | `28` C S | *OBC / DC-DC signal: missing information (E_VCU) |
@@ -236,8 +236,19 @@ Reading:
   `19 06`, buttons on each fault) usually hold the odometer and an occurrence counter.
 - **OBC:** four faults that are *pending* and still flagged failed, with "not completed this drive": they failed at
   the OBC's last test, which is a charging function not run since (not plugged in). So they come from a recent charge
-  (the last charge or the one before). Charging works, so probably a charge interrupted or refused by the wallbox;
-  read their snapshots next time, and read the list again right after a normal charge to see whether they clear.
+  (the last charge or the one before). **P1A71 is the known weak point of the e-CMP cars' 11 kW on-board charger**
+  (Mahle CAOBC1): "Integrated Charger/DC Converter Unit: Internal Fault", listed for the e-208, e-2008, Corsa-e,
+  Mokka-e, ë-C4 and DS 3 ([ACtronics](https://www.actronics.co.uk/psa-stellantis-p1a71-obc-fault-code),
+  [PMM, 2026-11-03](https://pmmonline.co.uk/article/why-do-some-stellantis-evs-fail-to-charge-at-home/)). -93 is among
+  the 15 suffixes they list, none explained (-49 and -72 most common). Symptoms they give: AC charging fails or stops
+  while DC works, the charge-port lock clicking open and shut, "24 h" or a false "charged" on the dash. External
+  causes are possible too (wallbox, cable, wet plug), so one fault is not proof of a broken unit. Peugeot covers the
+  e-208 / e-2008 charger for 4 years, unlimited km, on cars built up to 2022-11-01 (when the supplier changed);
+  L'argus says the ë-C4 is affected too, but Citroën did not confirm the cover
+  ([L'argus, 2025-04-03](https://www.largus.fr/actualite-automobile/peugeot-e-208-et-e-2008-la-defaillance-du-chargeur-embarque-pris-en-charge-par-stellantis-30039741.html)).
+  This OBC's date field reads 12-05-22, so probably a pre-change unit. P10E6 (-81 / -86 / -89) is not found online
+  either; its three failure types appearing together with P1A71 suggests the same charger event. Next: the snapshot /
+  extended data of each, and the list again after a normal AC charge.
 - **Camera:** U1208 (engine ECU data invalid) is failing now with the warning bit; on an EV there is no engine ECU,
   so this is probably a permanent configuration artefact of the shared camera software, not a real fault. U1F00
   only says the camera's own fault log overflowed. B1238 = windscreen blocked once (dirt, frost).
