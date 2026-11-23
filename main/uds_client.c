@@ -59,10 +59,11 @@ static const char *TAG = "uds_client";
     DTC_RECORD(req_name, "BMS faults: " req_label, 0x6B4, 0x694, subfunction)
 // ClearDiagnosticInformation, all groups (at the user's request, 2026-11-23). The page sends the group FFFFFF as the
 // parameter, so the request never appears among the plain buttons, only under that ECU's fault list behind a
-// confirmation; allowed() accepts nothing but FFFFFF. Clearing deletes the snapshot and extended data with the codes.
+// confirmation; allowed() accepts nothing but FFFFFF. The template holds FFFFFF too, because uds_client_init checks
+// every template against allowed(). Clearing deletes the snapshot and extended data with the codes.
 #define DTC_CLEAR(req_name, req_label, tx, rx) \
     {.name = req_name, .label = req_label, .tx_id = tx, .rx_id_min = rx, .rx_id_max = rx, \
-     .data = {0x04, 0x14, 0, 0, 0}, .param_offset = 2, .param_len = 3, .danger = true}
+     .data = {0x04, 0x14, 0xFF, 0xFF, 0xFF}, .param_offset = 2, .param_len = 3, .danger = true}
 #define ECU_DTC_CLEAR(prefix, ecu, tx, rx) DTC_CLEAR(prefix "_dtc_clear", "Clear faults: " ecu, tx, rx)
 // DiagnosticSessionControl: shown in red on the page.
 #define BMS_SESSION(req_name, req_label, session) \
