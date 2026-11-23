@@ -33,6 +33,13 @@ VARIANTS = {
     "Park lock": "EPLU/EPLU",
     "Camera": "CVM/CVM_3",
 }
+# Codes the car returned that PSA-RE lacks, named from other sources. Added to the ECU's list unless PSA-RE has it.
+MANUAL = {
+    "OBC": {
+        # actronics.co.uk/psa-stellantis-p1a71-obc-fault-code: the e-CMP 11 kW charger's known fault (2026-11-23).
+        "1A71": ["P1A71", "Integrated charger / DC converter unit: internal fault (not PSA-RE: ACtronics)", {}],
+    },
+}
 BLOCK = re.compile(r'(<script type="application/json" id="dtcs">)(.*?)(</script>)', re.S)
 
 
@@ -76,6 +83,9 @@ def main() -> None:
 
     tables = {ecu: ecu_table(Path(args.psa_re) / "diag/AEE2010.ev" / variant / "dtcs.yml")
               for ecu, variant in VARIANTS.items()}
+    for ecu, codes in MANUAL.items():
+        for raw, entry in codes.items():
+            tables[ecu].setdefault(raw, entry)
     counts = ", ".join(f"{ecu} {len(t) - 1}" for ecu, t in tables.items())
     shared = network_codes(tables)
     tables["_net"] = shared

@@ -233,7 +233,7 @@ Reading:
 - The motor's four U codes (lost BSI, battery ECU, OBC/DC-DC and VCU), the park lock's lost motor ECU and the
   steering's under voltage look like **one event**: a 12 V dip, a 12 V battery disconnect or the VCU reflash
   (2023-09-05) would make every ECU lose the others at once. Unproven; the snapshot / extended data (`19 04` /
-  `19 06`, buttons on each fault) usually hold the odometer and an occurrence counter.
+  `19 06`) usually hold the odometer and an occurrence counter, but the page offers them for the BMS only so far.
 - **OBC:** four faults that are *pending* and still flagged failed, with "not completed this drive": they failed at
   the OBC's last test, which is a charging function not run since (not plugged in). So they come from a recent charge
   (the last charge or the one before). **P1A71 is the known weak point of the e-CMP cars' 11 kW on-board charger**
@@ -247,8 +247,8 @@ Reading:
   L'argus says the ë-C4 is affected too, but Citroën did not confirm the cover
   ([L'argus, 2025-04-03](https://www.largus.fr/actualite-automobile/peugeot-e-208-et-e-2008-la-defaillance-du-chargeur-embarque-pris-en-charge-par-stellantis-30039741.html)).
   This OBC's date field reads 12-05-22, so probably a pre-change unit. P10E6 (-81 / -86 / -89) is not found online
-  either; its three failure types appearing together with P1A71 suggests the same charger event. Next: the snapshot /
-  extended data of each, and the list again after a normal AC charge.
+  either; its three failure types appearing together with P1A71 suggests the same charger event. Next: the list again
+  after a normal AC charge (and snapshot / extended data, once the page can request them from the OBC).
 - **Camera:** U1208 (engine ECU data invalid) is failing now with the warning bit; on an EV there is no engine ECU,
   so this is probably a permanent configuration artefact of the shared camera software, not a real fault. U1F00
   only says the camera's own fault log overflowed. B1238 = windscreen blocked once (dirt, frost).
