@@ -1084,12 +1084,12 @@ function handlePayload(p, t, id) {
       for (let i = 3; i + 3 < p.length; i += 4) items.push(dtcEntry(p[i], p[i + 1], p[i + 2], p[i + 3], ECUS[id]));
       dtcLists.set(id, { t, items });
     }
-  } else if (id !== BMS_RX) {
-    // Fault records and sessions are only requested from the BMS.
   } else if (p[0] === 0x59 && (p[1] === 0x04 || p[1] === 0x06) && p.length >= 6) {
-    const e = dtcEntry(p[2], p[3], p[4], p[5], "BMS");
-    udsMessages.set(`${e.code}-${hex(p[4])} ${p[1] === 4 ? "snapshot" : "extended"}`,
+    const ecu = ECUS[id] || hex(id, 3), e = dtcEntry(p[2], p[3], p[4], p[5], ecu);
+    udsMessages.set(`${ecu} ${e.code}-${hex(p[4])} ${p[1] === 4 ? "snapshot" : "extended"}`,
       { name: `${e.name} (${e.failure})`, bytes: p.slice(6), t });
+  } else if (id !== BMS_RX) {
+    // Sessions are only requested from the BMS.
   } else if (p[0] === 0x50 && p.length >= 2 && newer(session, t)) {
     session = { t, type: p[1], p2: p.length >= 4 ? (p[2] << 8) | p[3] : null,
       p2star: p.length >= 6 ? ((p[4] << 8) | p[5]) * 10 : null };
@@ -1179,6 +1179,10 @@ function toggleReadAll(names, group) {
   dirty = true;
 }
 
+// Reply ID → uds_client's request name prefix, for the per-fault Snapshot / Extended data buttons.
+const DTC_RECORD_PREFIX = { 0x694: "bms", 0x58F: "obc", 0x686: "cmel", 0x682: "vcu", 0x68D: "abs", 0x695: "dae",
+  0x64A: "cvm" };
+
 function renderDtcs(online) {
   const box = $("#uds-dtcs");
   const rows = [];
@@ -1213,9 +1217,11 @@ function renderDtcs(online) {
       st.className = "st";
       st.textContent = `${e.failure} · ${e.status} (status ${hex(e.statusByte)})`;
       d.append(c, e.name, st);
-      // Snapshot / extended data requests exist for the BMS only.
-      const records = [["bms_dtc_snapshot", "Snapshot"], ["bms_dtc_extended", "Extended data"]];
-      for (const [name, label] of id === BMS_RX ? records : []) {
+      // Snapshot / extended data, where uds_client has them for this ECU (not the park lock).
+      const prefix = DTC_RECORD_PREFIX[id];
+      const records = [[`${prefix}_dtc_snapshot`, "Snapshot"], [`${prefix}_dtc_extended`, "Extended data"]]
+        .filter(([name]) => prefix && uds && uds.requests.some(r => r.name === name));
+      for (const [name, label] of records) {
         const b = document.createElement("button");
         b.textContent = label;
         b.disabled = !online || udsBusy() || !!readAll;

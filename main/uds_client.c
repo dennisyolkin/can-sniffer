@@ -50,10 +50,13 @@ static const char *TAG = "uds_client";
 // ReadDTCInformation. Status masks: 0x09 = test failed now or confirmed (what PSA tools list), 0x2D = also pending
 // and "failed since the last clear", i.e. the history.
 #define BMS_DTC(name, label, ...) BMS(name, "BMS faults: " label, __VA_ARGS__)
-// Per fault code: the page fills in the 3-byte DTC at data[3]; record FF = all records.
-#define BMS_DTC_RECORD(req_name, req_label, subfunction) \
-    {.name = req_name, .label = "BMS faults: " req_label, .tx_id = 0x6B4, .rx_id_min = 0x694, .rx_id_max = 0x694, \
+// Per fault code: 0x04 snapshot (conditions when it was stored), 0x06 extended data (counters). The page fills in
+// the 3-byte DTC at data[3]; record FF = all records. Shown as buttons on the fault's row, not in the button lists.
+#define DTC_RECORD(req_name, req_label, tx, rx, subfunction) \
+    {.name = req_name, .label = req_label, .tx_id = tx, .rx_id_min = rx, .rx_id_max = rx, \
      .data = {0x06, 0x19, subfunction, 0, 0, 0, 0xFF}, .param_offset = 3, .param_len = 3}
+#define BMS_DTC_RECORD(req_name, req_label, subfunction) \
+    DTC_RECORD(req_name, "BMS faults: " req_label, 0x6B4, 0x694, subfunction)
 // DiagnosticSessionControl: shown in red on the page.
 #define BMS_SESSION(req_name, req_label, session) \
     {.name = req_name, .label = "BMS session: " req_label, .tx_id = 0x6B4, .rx_id_min = 0x694, .rx_id_max = 0x694, \
@@ -74,6 +77,11 @@ static const char *TAG = "uds_client";
 // The page names the codes from PSA-RE's list for that ECU (tools/dtc_names.py).
 #define ECU_DTC_LIST(prefix, ecu, tx, rx) \
     REQUEST(prefix "_dtc_list", "Fault lists: " ecu, tx, rx, 0x03, 0x19, 0x02, 0x09)
+// Not for the park lock: it went silent after the first frame of a multi-frame reply (20261122), and these replies
+// are usually multi-frame.
+#define ECU_DTC_RECORDS(prefix, ecu, tx, rx) \
+    DTC_RECORD(prefix "_dtc_snapshot", "Fault records: " ecu " snapshot", tx, rx, 0x04), \
+    DTC_RECORD(prefix "_dtc_extended", "Fault records: " ecu " extended", tx, rx, 0x06)
 #define MOTOR(name, label, did) DID_READ(name, "Motor: " label, 0x6A6, 0x686, did)
 #define OBC(name, label, did) DID_READ(name, "OBC: " label, 0x590, 0x58F, did)
 #define PARK_LOCK(name, label, did) DID_READ(name, "Park lock: " label, 0x5CA, 0x5AA, did)
@@ -176,6 +184,13 @@ static const uds_request_t requests[] = {
     ECU_DTC_LIST("dae", "Steering", 0x6B5, 0x695),
     ECU_DTC_LIST("eplu", "Park lock", 0x5CA, 0x5AA),
     ECU_DTC_LIST("cvm", "Camera", 0x74A, 0x64A),
+
+    ECU_DTC_RECORDS("obc", "OBC", 0x590, 0x58F),
+    ECU_DTC_RECORDS("cmel", "Motor", 0x6A6, 0x686),
+    ECU_DTC_RECORDS("vcu", "VCU", 0x6A2, 0x682),
+    ECU_DTC_RECORDS("abs", "ABS", 0x6AD, 0x68D),
+    ECU_DTC_RECORDS("dae", "Steering", 0x6B5, 0x695),
+    ECU_DTC_RECORDS("cvm", "Camera", 0x74A, 0x64A),
 
     // DC05 / DC06 next to the BMS's D816 / D815 tell the traction load from the auxiliaries (the 3A8 energy
     // counter came out ~18 % below 563 x 5C3 on 2026-11-20); DC5B pins down the scale of 208 b5 (torque).
