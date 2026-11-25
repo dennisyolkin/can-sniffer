@@ -68,6 +68,14 @@
   #uds-dtcs button { font-size: .9rem; padding: .45rem .9rem; margin: .4rem .5rem 0 0; min-height: 2.3rem; }
   #uds-dtcs .res { font-size: .85rem; margin-top: .25rem; }
   #uds-dtcs .res.bad { color: var(--bad); }
+  /* Fault status at a glance: a dot and a word, colored by how current the fault is. */
+  #uds-dtcs .sev { display: inline-flex; align-items: center; gap: .3rem; font-size: .75rem; font-weight: 600;
+    padding: 0 .45rem; border: 1px solid currentColor; border-radius: 999px; margin-right: .4rem; vertical-align: .1em; }
+  #uds-dtcs .sev::before { content: ""; width: .55rem; height: .55rem; border-radius: 50%; background: currentColor; }
+  #uds-dtcs .sev.active { color: var(--bad); }
+  #uds-dtcs .sev.recent { color: var(--warn); }
+  #uds-dtcs .sev.stored { color: var(--muted); }
+  #uds-dtcs .sev.ok { color: var(--good); }
   #uds-dtcs .fecu { border: 1px solid var(--line); border-radius: 8px; padding: .4rem .7rem .6rem; margin: .7rem 0; }
   #uds-dtcs .fecu .ecu { margin-top: 0; font-size: 1rem; }
   /* Clear faults at the far end of the row, away from the read buttons. */
@@ -1064,6 +1072,17 @@ function dtcEntry(b0, b1, ftb, status, ecu) {
     statusByte: status, ftb: hex(ftb), hexParam: raw + hex(ftb) };
 }
 
+// One word for the status byte, most current first: failed at its last test (bit 0); failed this drive or the last
+// one but passed since (bits 1, 2); only in the fault memory (bits 3, 5). Bit 7 adds "lamp".
+function dtcSeverity(status) {
+  const [cls, text] = status & 0x01 ? ["active", "failed at its last test"]
+    : status & 0x06 ? ["recent", "failed this drive or the last one, passed since"]
+    : status & 0x28 ? ["stored", "kept in the fault memory, not failing now"]
+    : ["ok", "no failure recorded"];
+  const lamp = status & 0x80;
+  return { cls, word: cls + (lamp ? " · lamp" : ""), title: text + (lamp ? "; the ECU asks for the warning lamp" : "") };
+}
+
 const dtcLists = new Map();  // reply ID → { t, items } from the latest 59 02
 const dtcCleared = new Map();  // reply ID → board ms of the latest 54 (faults cleared)
 const recordKey = (ecu, e, kind) => `${ecu} ${e.code}-${e.ftb} ${kind}`;
@@ -1396,10 +1415,14 @@ function faultRow(id, ecu, e, idle) {
   const c = document.createElement("span");
   c.className = "code";
   c.textContent = e.code + " ";
+  const severity = dtcSeverity(e.statusByte), sev = document.createElement("span");
+  sev.className = "sev " + severity.cls;
+  sev.textContent = severity.word;
+  sev.title = severity.title;
   const st = document.createElement("div");
   st.className = "st";
   st.textContent = `${e.failure} · ${e.status} (status ${hex(e.statusByte)})`;
-  d.append(c, e.name, st);
+  d.append(sev, c, e.name, st);
   // Snapshot / extended data, where uds_client has them for this ECU (not the park lock). Each request's outcome
   // goes on a line of its own under the buttons.
   const prefix = DTC_RECORD_PREFIX[id];
