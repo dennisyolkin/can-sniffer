@@ -832,7 +832,9 @@ const NRC = {
   0x10: "general reject", 0x11: "service not supported", 0x12: "sub-function not supported",
   0x13: "wrong length", 0x22: "conditions not correct", 0x31: "request out of range",
   0x33: "security access denied", 0x78: "response pending", 0x7E: "sub-function not supported in session",
-  0x7F: "service not supported in session",
+  0x7F: "service not supported in session", 0x81: "rpm too high", 0x82: "rpm too low",
+  0x83: "engine is running", 0x84: "engine is not running", 0x88: "vehicle speed too high",
+  0x89: "vehicle speed too low", 0x92: "voltage too high", 0x93: "voltage too low",
 };
 
 const hex = (n, w = 2) => n.toString(16).toUpperCase().padStart(w, "0");
@@ -1245,7 +1247,10 @@ function followTracked(log) {
 const NRC_HINTS = {
   "19:12": "this ECU keeps no such record", "19:31": "nothing stored for this fault",
   "19:7E": "only in the extended session", "19:7F": "only in the extended session",
-  "14:22": "the ECU won't clear now: try with the car switched on but not in Ready (high voltage off)",
+  // 2026-11-25: the motor refused in Ready and while the car was switching off; with the ignition on (not Ready) it
+  // cleared, as did the others. The camera said "speed too high" while the car was going to sleep.
+  "14:22": "the ECU won't clear now: switch the ignition on without Ready (press START without the brake)",
+  "14:88": "no valid speed (the car is going to sleep?): switch the ignition on without Ready",
   "14:7E": "only in the extended session", "14:7F": "only in the extended session",
   "14:33": "the ECU wants security access first (not implemented)", "10:22": "the ECU won't change session now",
 };
@@ -1364,7 +1369,8 @@ const FAULT_ECUS = [0x694, 0x58F, 0x686, 0x682, 0x68D, 0x695, 0x5AA, 0x64A].map(
     : { id, list: `${prefix}_dtc_list`, count: `${prefix}_dtc_count` };
 });
 const listKinds = new Map();  // reply ID → "list" / "history": which list was asked for last
-let faultsReadAll = null;     // { queue: [FAULT_ECUS entries] } while "Read all ECUs" runs
+let faultsReadAll = null;
+let faultsHtml = "";          // what the Faults tab shows now, to leave it alone when nothing changed     // { queue: [FAULT_ECUS entries] } while "Read all ECUs" runs
 
 function readFaults(f, kind, next) {
   if (kind !== "count") listKinds.set(f.id, kind);
@@ -1456,7 +1462,8 @@ function faultCard(f, online, idle) {
     ? (list.items.length ? `${list.items.length} fault${list.items.length === 1 ? "" : "s"}` : "no faults") +
       (listKinds.get(id) === "history" ? " (history)" : "") + ` · read at ${(list.t / 1000).toFixed(0)} s` +
       (cleared > list.t ? ` · cleared at ${(cleared / 1000).toFixed(0)} s, read again` : "")
-    : count ? `${count.n} fault${count.n === 1 ? "" : "s"} (count only) · read at ${(count.t / 1000).toFixed(0)} s`
+    : count ? `${count.n} fault${count.n === 1 ? "" : "s"} · read at ${(count.t / 1000).toFixed(0)} s` +
+      (count.n ? " (count only: Read faults lists them)" : "")
     : "not read yet");
   card.append(h);
   const btns = document.createElement("div");
@@ -1489,7 +1496,7 @@ function faultCard(f, online, idle) {
     const d = document.createElement("div");
     d.className = "res" + (tr.state === "ok" ? "" : " bad");
     d.textContent = `${label}: ` + (tr.state === "ok" ? "accepted, read the list again" : outcomeText(tr)) +
-      (tr.state === "silent" && kind !== "clear" ? " (asleep?)" : "");
+      (tr.state === "silent" ? " (asleep? switch the ignition on)" : "");
     card.append(d);
   }
   const session = sessions.get(id);
@@ -1510,7 +1517,7 @@ function renderFaults() {
     "Extended data: counters, where the ECU keeps them." : "Fault codes need the TX mode image, which sends " +
     "requests to the ECUs. This board runs listen-only (or hasn't sent its request list yet).");
   $("#faults-top").hidden = !uds;
-  if (!uds) { $("#uds-dtcs").replaceChildren(); return; }
+  if (!uds) { $("#uds-dtcs").replaceChildren(); faultsHtml = ""; return; }
   followTracked(uds.log);  // also times out a request the board dropped while nothing else arrives
   const idle = online && !udsBusy() && !readAll && !faultsReadAll;
   const all = $("#faults-read-all");
@@ -1525,6 +1532,12 @@ function renderFaults() {
       "~25,650 km; older records get no time). Wrong if it restarted again since. The km are always right.";
     rows.push(d);
   }
+  // Rebuilt on every render (5 times a second while frames arrive), but put in the page only when it changed: a
+  // button replaced under the finger loses the tap (20261125-fault-codes-2: presses that did nothing).
+  const wrap = document.createElement("div");
+  wrap.append(...rows);
+  if (wrap.innerHTML === faultsHtml) return;
+  faultsHtml = wrap.innerHTML;
   $("#uds-dtcs").replaceChildren(...rows);
 }
 

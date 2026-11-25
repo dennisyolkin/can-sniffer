@@ -27,8 +27,10 @@ Implemented that way (2026-11-23): `<prefix>_dtc_clear` for all 8 ECUs, the page
 request's parameter, and `allowed()` accepts nothing else, so one group or one DTC can't be cleared. The red "Clear
 faults" button sits next to an ECU's fault list (so it appears only after the list was read) and always asks first;
 if any listed fault's snapshot or extended data hasn't been read on that page, it lists them and wants the ECU's name
-typed. First try (motor, 2026-11-25, in Ready): `7F 14 22`, conditions not correct; the page now says so and
-suggests the car on but not in Ready. Where an ECU wants the extended session, "Sessions" has `10 03` for each. Faults outside the list's mask `09` (e.g. only pending) are not
+typed. Tried on 2026-11-25: in Ready the motor answered `7F 14 22` (conditions not correct); with the car switching
+off `7F 14 22` again, the camera `7F 14 88` (vehicle speed too high), park lock and steering nothing; **with the
+ignition on but not in Ready all of them cleared** (`54`; camera and motor after "response pending"). The page's
+hints say so. Where an ECU wants the extended session, "Sessions" has `10 03` for each. Faults outside the list's mask `09` (e.g. only pending) are not
 shown, so they go without their records being offered.
 
 ## Write a DID: `2E` WriteDataByIdentifier

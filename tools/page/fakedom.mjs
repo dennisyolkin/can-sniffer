@@ -32,7 +32,11 @@ class El {
   set textContent(v) { this.text = String(v); this.children = []; }
   get textContent() { return this.text + this.children.map(c => (c.s !== undefined ? c.s : c.textContent)).join(""); }
   set innerHTML(v) { this.textContent = String(v).replace(/<[^>]*>/g, ""); }
-  get innerHTML() { return this.textContent; }
+  // Enough of the markup to tell two trees apart (tag, class, disabled, hidden, text).
+  get innerHTML() {
+    return this.text + this.children.map(c => (c.s !== undefined ? c.s
+      : `<${c.tag} ${c.className}${c.disabled ? " disabled" : ""}${c.hidden ? " hidden" : ""}>${c.innerHTML}</${c.tag}>`)).join("");
+  }
   get firstChild() { return this.children[0] || null; }
   setAttribute(k, v) { this[k] = v; }
   getAttribute(k) { return this[k] ?? null; }

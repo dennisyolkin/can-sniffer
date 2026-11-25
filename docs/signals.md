@@ -31,6 +31,9 @@ Sources:
   from the 7 ECUs twice, fault counts once.
 - **20261125-fault-codes** (2026-11-25): ~9 min parked in Ready, 26,057 km: fault lists, snapshot (`19 04`) of 13 of
   the 15 faults, extended data (`19 06`) of a few, fault counts and lists again, one clear (motor).
+- **20261125-fault-codes-2** (2026-11-25, evening): right after an AC charge (stopped normally; the 11-22 one that set
+  P1A71 was stopped from the charging operator's app). Ready, then off, then ignition on: snapshots again, every ECU
+  but the OBC cleared, all lists read again.
 - **PSA-RE** ([github.com/prototux/PSA-RE](https://github.com/prototux/PSA-RE)): community database of PSA
   frames in YAML. The ë-C4 is car code `C41`, architecture `AEE2010.electric` (child of `.ev`, `.full`).
   Decode a capture with `tools/psare.py <session> <PSA-RE checkout>`; it resolves the variant chain.
@@ -305,6 +308,30 @@ would be `7F`/`7E`); most likely the motor won't clear with the high voltage up.
 The fault counts and lists read after the snapshots were identical to the first reads and to 11-23. Retries: our
 requests lost arbitration more often in this session (up to 4 tries), and the steering's fault count failed after
 5 (`uds_tx_failed`), at the same ~1,555 frames/s.
+
+### After a normal charge, and clearing (20261125-fault-codes-2)
+
+**No new fault from the charge, and P1A71's test passed:** its status went `6D` → **`68`** (confirmed, failed
+since the last clear, test not completed this cycle): "failing now" and "pending" are gone, so the OBC ran that check
+during this charge and it passed. P10E6 (-81/-86/-89) stayed `6D` (their checks didn't run). That fits P1A71-93
+being set by the 11-22 charge **stopped from the charging operator's app** (the wallbox cutting the supply under
+load) and not by the charger itself; one more normal charge without it coming back would make that likely.
+
+Motor U114A (lost the VCU) read `2E` this time (failed this cycle, pending): it happened again during this charge or
+the wake-up after it. Its snapshot is still the first one (12,636 km), so records keep the first occurrence.
+
+Clearing (`14 FF FF FF`), by car state (`572` b0: `58` Ready, `50` off; frame rate for awake / asleep):
+
+| Time | State | Results |
+|------|-------|---------|
+| 529, 565 s | off, car winding down (~1,230 frames/s) | motor `7F 14 22` (conditions not correct) |
+| 597 s | going to sleep (~820/s) | camera `7F 14 88` (vehicle speed too high: no valid speed) |
+| 616, 634 s | mostly asleep (~700/s) | park lock, steering: no answer |
+| 650 s on | **ignition on, not Ready** (~1,540/s) | steering, park lock, VCU `54`; camera and motor `54` after two "pending" |
+
+So **clear with the ignition on but not in Ready**: the motor refuses in Ready (11-25 morning) and while the car is
+switching off. Afterwards every list was empty but the OBC's (4) and the BMS's (none to begin with), including the
+camera's U1208 that was "failing now": whether it and the motor's U114A come back is the next thing to watch.
 
 Park lock reads on 2026-11-23 (parked in P, Ready): D400 status `00` = locked; D40C activations `1D7F` = 7,551;
 D40E activation errors `FFFFFFFC` (probably "not available", not a count); D404 supply 14.81 / 14.82 V (= the DC/DC
