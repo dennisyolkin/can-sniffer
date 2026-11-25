@@ -1,0 +1,9 @@
+{
+  "name": "can-sniffer-page-tools",
+  "private": true,
+  "type": "module",
+  "description": "Checks for the live page (main/web/index.html): faults_check.mjs (no dependencies), screenshot.mjs (Playwright)",
+  "devDependencies": {
+    "playwright": "1.65.0"
+  }
+}

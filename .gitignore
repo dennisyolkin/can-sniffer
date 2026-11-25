@@ -87,3 +87,6 @@ Desktop.ini
 
 # Wi-Fi credentials (see sdkconfig.secrets.example)
 sdkconfig.secrets
+
+# Node (tools/page)
+node_modules/

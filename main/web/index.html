@@ -70,6 +70,9 @@
   #uds-dtcs .res.bad { color: var(--bad); }
   #uds-dtcs .fecu { border: 1px solid var(--line); border-radius: 8px; padding: .4rem .7rem .6rem; margin: .7rem 0; }
   #uds-dtcs .fecu .ecu { margin-top: 0; font-size: 1rem; }
+  /* Clear faults at the far end of the row, away from the read buttons. */
+  #uds-dtcs .acts { display: flex; flex-wrap: wrap; }
+  #uds-dtcs .acts button.danger { margin-left: auto; margin-right: 0; }
   #uds-values { display: grid; grid-template-columns: max-content 1fr; gap: .15rem .8rem; font-size: .9rem; margin: .3rem 0 .6rem; }
   #uds-values .t { color: var(--muted); font-size: .8rem; }
   #uds-messages details { margin-bottom: .3rem; }
@@ -1293,6 +1296,7 @@ function splitSnapshot(b) {
 // The time counter restarted around 2026-10-10 (trip1 on 10-11 read 88,600 s at 25,650 km; an OBC record at
 // 25,483 km read 324,053 s): a record below this odometer predates the restart, so its counter gives no time.
 const COUNTER_RESTART_KM = 25650;
+let counterTimeShown = false;  // a snapshot line shows a time from the counter: renderFaults adds the footnote
 const agoText = s => s < 3600 ? `${Math.round(s / 60)} min ago` : s < 2 * 86400 ? `${(s / 3600).toFixed(1)} h ago`
   : `${(s / 86400).toFixed(1)} days ago (${new Date(Date.now() - s * 1000).toLocaleDateString()})`;
 
@@ -1312,13 +1316,16 @@ function snapshotSummary(id, bytes) {
   const tc = dids.get(0xD4CA);
   if (tc && tc.length === 4 && now && !(recordKm !== null && recordKm < COUNTER_RESTART_KM)) {
     const ago = (be(now.data.slice(0, 4)) - be(tc)) / 10;
-    if (ago >= 0) parts.push(agoText(ago) + "*");
+    if (ago >= 0) {
+      parts.push(agoText(ago) + "*");
+      counterTimeShown = true;
+    }
   }
   const soc = dids.get(0xD8EB);
   if (soc && soc.length === 2) parts.push(`SoC ${(be(soc) / 10).toFixed(0)} %`);
   const lv = dids.get(0xD822), lvSteer = id === 0x695 && dids.get(0xD404);
-  if (lv && lv.length === 2) parts.push(`12 V ${(be(lv) / 100).toFixed(1)} V`);
-  else if (lvSteer && lvSteer.length === 1) parts.push(`12 V ${(lvSteer[0] / 10).toFixed(1)} V`);
+  if (lv && lv.length === 2) parts.push(`12\u00a0V ${(be(lv) / 100).toFixed(1)}\u00a0V`);
+  else if (lvSteer && lvSteer.length === 1) parts.push(`12\u00a0V ${(lvSteer[0] / 10).toFixed(1)}\u00a0V`);
   const mains = dids.get(0xD82B);
   if (mains && mains.length === 2 && be(mains) > 0) parts.push(`charging, mains ${be(mains)} V`);
   const hvObc = dids.get(0xD824), hvMotor = dids.get(0xDC06);
@@ -1453,6 +1460,7 @@ function faultCard(f, online, idle) {
     : "not read yet");
   card.append(h);
   const btns = document.createElement("div");
+  btns.className = "acts";
   const actions = [["list", list ? "Read again" : "Read faults"], ["count", "Count"]];
   if (f.history) actions.push(["history", "History"]);
   for (const [kind, label] of actions.filter(([kind]) => hasRequest(f[kind]))) {
@@ -1508,8 +1516,9 @@ function renderFaults() {
   const all = $("#faults-read-all");
   setText(all, faultsReadAll ? `Stop (${faultsReadAll.queue.length + 1} left)` : "Read all ECUs");
   all.disabled = !online || (!faultsReadAll && !idle);
+  counterTimeShown = false;
   const rows = FAULT_ECUS.filter(f => hasRequest(f.list)).map(f => faultCard(f, online, idle));
-  if (rows.some(r => r.textContent.includes("ago*"))) {
+  if (counterTimeShown) {
     const d = document.createElement("div");
     d.className = "st";
     d.textContent = "* From the car's time counter (552), which restarts now and then (last around 10 Oct 2026, " +

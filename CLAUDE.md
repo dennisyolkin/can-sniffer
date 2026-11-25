@@ -219,8 +219,14 @@ idf.py -B build menuconfig
 - Dependencies come from the component manager (`main/idf_component.yml`, `led_strip ^3`).
   `managed_components/` is generated.
 - clangd uses `build/compile_commands.json`. Build once before relying on diagnostics.
-- There are no host tests. Verification is on hardware. When changing the TWAI or SD path,
-  describe what to observe (LED, files on the card) rather than claiming it works.
+- No host tests for the firmware: verification is on hardware. When changing the TWAI or SD path, describe what to
+  observe (LED, files on the card) rather than claiming it works.
+- The page has two checks against a replayed session (Node, in `tools/page/`; `live_replay.py` also replays the
+  session's diagnostics from `events.csv`): `node tools/page/faults_check.mjs <session>` runs the real page script
+  without a browser and prints the Faults tab as text (exit 1 on a script error); `node tools/page/screenshot.mjs
+  <session> [--tab faults] [--dark]` saves a phone-size screenshot from headless Chromium and reports page errors and
+  horizontal overflow (setup once: `cd tools/page && npm install && npx playwright install chromium`). Run them after
+  changing the page; look at the screenshot.
 - The page can be developed without the car: `tools/live_replay.py` serves it and replays a capture over the
   same WebSocket protocol (`uv run --project tools tools/live_replay.py ~/tmp/trip3 --start 150`, then
   http://localhost:8080/). The page is re-read on every request.
@@ -244,12 +250,13 @@ idf.py -B build menuconfig
 ## Analysis (off-device)
 
 Captures are analyzed on the laptop. If helper scripts are added, put them under `tools/`
-(Python is fine there), separate from the firmware.
+(Python is fine there; Node for the page checks in `tools/page/`), separate from the firmware.
 
 - Run with `uv run --project tools tools/<script>.py <session_dir> ...` (deps in `tools/pyproject.toml`).
   `canlog.py` parses `can.log` and caches it as `can.parquet` in the session directory.
 - `check_page_signals.py` decodes a capture with the live page's signal table (first/last/min/max per signal);
-  run it after changing that table. `live_replay.py` replays a capture to the page (see Build).
+  run it after changing that table. `live_replay.py` replays a capture to the page (see Build), diagnostics included;
+  `--start end` loads the whole session at once.
 - `inventory.py` (health + per-ID table), `bytestats.py` (per-byte classes), `plot.py` (fields over time,
   to PNG), `correlate.py` (rank fields against a reference), `trends.py` (slowly rising/falling fields).
 - `psare.py` decodes a capture with [PSA-RE](https://github.com/prototux/PSA-RE) frame definitions (needs a local
