@@ -90,6 +90,11 @@ static const char *TAG = "uds_client";
 #define ECU_DTC_RECORDS(prefix, ecu, tx, rx) \
     DTC_RECORD(prefix "_dtc_snapshot", "Fault records: " ecu " snapshot", tx, rx, 0x04), \
     DTC_RECORD(prefix "_dtc_extended", "Fault records: " ecu " extended", tx, rx, 0x06)
+// The extended session, for the extended data (19 06) the motor refuses in the default one (7F 19 7E, 20261125).
+// The page chains it: session, then the record request within the ~5 s before the ECU falls back by itself.
+#define ECU_SESSION_EXTENDED(prefix, ecu, tx, rx) \
+    {.name = prefix "_session_extended", .label = "Sessions: " ecu " extended (10 03)", .tx_id = tx, \
+     .rx_id_min = rx, .rx_id_max = rx, .data = {0x02, 0x10, 0x03}, .danger = true}
 #define MOTOR(name, label, did) DID_READ(name, "Motor: " label, 0x6A6, 0x686, did)
 #define OBC(name, label, did) DID_READ(name, "OBC: " label, 0x590, 0x58F, did)
 #define PARK_LOCK(name, label, did) DID_READ(name, "Park lock: " label, 0x5CA, 0x5AA, did)
@@ -200,6 +205,13 @@ static const uds_request_t requests[] = {
     ECU_DTC_RECORDS("abs", "ABS", 0x6AD, 0x68D),
     ECU_DTC_RECORDS("dae", "Steering", 0x6B5, 0x695),
     ECU_DTC_RECORDS("cvm", "Camera", 0x74A, 0x64A),
+
+    ECU_SESSION_EXTENDED("obc", "OBC", 0x590, 0x58F),
+    ECU_SESSION_EXTENDED("cmel", "Motor", 0x6A6, 0x686),
+    ECU_SESSION_EXTENDED("vcu", "VCU", 0x6A2, 0x682),
+    ECU_SESSION_EXTENDED("abs", "ABS", 0x6AD, 0x68D),
+    ECU_SESSION_EXTENDED("dae", "Steering", 0x6B5, 0x695),
+    ECU_SESSION_EXTENDED("cvm", "Camera", 0x74A, 0x64A),
 
     ECU_DTC_CLEAR("obc", "OBC", 0x590, 0x58F),
     ECU_DTC_CLEAR("cmel", "Motor", 0x6A6, 0x686),

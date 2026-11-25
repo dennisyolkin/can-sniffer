@@ -65,7 +65,9 @@
   #uds-dtcs .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; }
   #uds-dtcs .st { color: var(--muted); font-size: .8rem; }
   #uds-dtcs .ecu { font-weight: 600; margin-top: .5rem; }
-  #uds-dtcs button { font-size: .8rem; padding: .2rem .5rem; margin: .2rem .3rem 0 0; }
+  #uds-dtcs button { font-size: .9rem; padding: .45rem .9rem; margin: .4rem .5rem 0 0; min-height: 2.3rem; }
+  #uds-dtcs .res { font-size: .85rem; margin-top: .25rem; }
+  #uds-dtcs .res.bad { color: var(--bad); }
   #uds-values { display: grid; grid-template-columns: max-content 1fr; gap: .15rem .8rem; font-size: .9rem; margin: .3rem 0 .6rem; }
   #uds-values .t { color: var(--muted); font-size: .8rem; }
   #uds-messages details { margin-bottom: .3rem; }
@@ -1052,7 +1054,7 @@ const dtcLists = new Map();  // reply ID → { t, items } from the latest 59 02
 const dtcCleared = new Map();  // reply ID → board ms of the latest 54 (faults cleared)
 const recordKey = (ecu, e, kind) => `${ecu} ${e.code}-${e.ftb} ${kind}`;
 const dtcCounts = new Map();  // reply ID → { t, n } from the latest 59 01
-let session = null;    // { t, type, p2, p2star } from the latest 50 xx
+const sessions = new Map();  // reply ID → { t, type, p2, p2star } from the latest 50 xx
 
 // Short description of a positive 0x59 / 0x50 reply, for the log line.
 function describeUds(p) {
@@ -1093,11 +1095,9 @@ function handlePayload(p, t, id) {
       { name: `${e.name} (${e.failure})`, bytes: p.slice(6), t });
   } else if (p[0] === 0x54) {
     if (!(dtcCleared.get(id) > t)) dtcCleared.set(id, t);
-  } else if (id !== BMS_RX) {
-    // Sessions are only requested from the BMS.
-  } else if (p[0] === 0x50 && p.length >= 2 && newer(session, t)) {
-    session = { t, type: p[1], p2: p.length >= 4 ? (p[2] << 8) | p[3] : null,
-      p2star: p.length >= 6 ? ((p[4] << 8) | p[5]) * 10 : null };
+  } else if (p[0] === 0x50 && p.length >= 2 && newer(sessions.get(id), t)) {
+    sessions.set(id, { t, type: p[1], p2: p.length >= 4 ? (p[2] << 8) | p[3] : null,
+      p2star: p.length >= 6 ? ((p[4] << 8) | p[5]) * 10 : null });
   }
 }
 
@@ -1171,6 +1171,7 @@ function onUds(msg) {
     // The log is resent with every change; handlePayload ignores replies older than what it has.
     handlePayload(b.slice(1, 1 + b[0]), e.t, e.id);
   }
+  followTracked(msg.log);
   if (!readAll) return;
   const finished = msg.log.some(e => e.req === readAll.current && FINAL_KINDS.includes(e.kind) && e.t > readAll.after);
   // The board ignores a request while another is in flight; don't wait forever for one it dropped.
@@ -1189,6 +1190,130 @@ function toggleReadAll(names, group) {
 const DTC_RECORD_PREFIX = { 0x694: "bms", 0x58F: "obc", 0x686: "cmel", 0x682: "vcu", 0x68D: "abs", 0x695: "dae",
   0x64A: "cvm", 0x5AA: "eplu" };
 const hasRequest = name => !!uds && uds.requests.some(r => r.name === name);
+
+// Requests sent from the fault list (snapshot, extended data, clear, session) are followed through the board's log
+// to their outcome, so the row can say what happened. key → { req, id, after, state, nrc, service, then }.
+// state: sending → ok / refused (negative reply) / silent (no reply) / failed (not sent) / lost (board ignored it).
+const tracked = new Map();
+
+function track(key, id, req, param, then) {
+  const last = uds.log[uds.log.length - 1];
+  tracked.set(key, { req, id, after: last ? last.t : -1, state: "sending", sentAt: Date.now(), then });
+  send(`uds ${req}${param ? " " + param : ""}`);
+  dirty = true;
+}
+
+function followTracked(log) {
+  for (const r of tracked.values()) {
+    if (r.state !== "sending") continue;
+    for (const e of log) {
+      if (e.req !== r.req || e.t <= r.after) continue;
+      if (e.kind === "rx") {
+        const b = frameBytes(e);
+        if (b[0] >> 4 === 0 && b[1] === 0x7F && b[3] !== 0x78) { r.service = b[2]; r.nrc = b[3]; }
+      } else if (e.kind === "tx_failed" || e.kind === "refused") {
+        r.state = "failed";
+        break;
+      } else if (e.kind === "done") {
+        r.state = r.nrc !== undefined ? "refused" : e.len ? "ok" : "silent";
+        break;
+      }
+    }
+    // The board ignores a request while another is in flight; don't wait forever for one it dropped.
+    if (r.state === "sending" && Date.now() - r.sentAt > 5000 && !udsBusy()) r.state = "lost";
+    if (r.state !== "sending") dirty = true;
+    if (r.state === "ok" && r.then) r.then();
+  }
+}
+
+// What a negative reply means for that request, and what to try.
+const NRC_HINTS = {
+  "19:12": "this ECU keeps no such record", "19:31": "nothing stored for this fault",
+  "19:7E": "only in the extended session", "19:7F": "only in the extended session",
+  "14:22": "the ECU won't clear now: try with the car switched on but not in Ready (high voltage off)",
+  "14:7E": "only in the extended session", "14:7F": "only in the extended session",
+  "14:33": "the ECU wants security access first (not implemented)", "10:22": "the ECU won't change session now",
+};
+
+function outcomeText(r) {
+  if (r.state === "sending") return "asking…";
+  if (r.state === "silent") return "no answer";
+  if (r.state === "lost") return "not sent: the board was busy with another request; try again";
+  if (r.state === "failed") return "not sent: the bus was too busy (or not error_active); try again";
+  if (r.state === "refused") {
+    const hint = NRC_HINTS[`${hex(r.service)}:${hex(r.nrc)}`];
+    return `refused: ${NRC[r.nrc] || "NRC"} (${hex(r.nrc)})` + (hint ? ` — ${hint}` : "");
+  }
+  return "done";
+}
+
+// Snapshot records (59 04): record number, number of DIDs, then DID + value pairs. Lengths aren't sent and many DIDs
+// aren't in PSA-RE, so the record is split the way that fits best: the lengths below where known, else 1-4 bytes.
+// From the 20261125 records (docs/signals.md, "Snapshots and extended data").
+const SNAP_LEN = { 0xD4CA: 4, 0xD49C: 4, 0xD8EB: 2, 0xD822: 2, 0xD82B: 2, 0xD82C: 2, 0xD824: 2, 0xD805: 2,
+  0xD407: 1, 0xD827: 1, 0xD802: 2, 0xDBFA: 4, 0xDC00: 2, 0xDC05: 2, 0xDC06: 2, 0xDC70: 2, 0xDC79: 2, 0xDC02: 2,
+  0xD404: 1 };
+const SNAP_DID_HI = [0x01, 0xD4, 0xD5, 0xD8, 0xDA, 0xDB, 0xDC];
+const be = v => v.reduce((a, x) => a * 256 + x, 0);
+
+function splitSnapshot(b) {
+  const memo = new Map();
+  const best = i => {
+    if (i === b.length) return { score: 0, items: [] };
+    if (memo.has(i)) return memo.get(i);
+    let res = null;
+    if (i + 3 <= b.length && SNAP_DID_HI.includes(b[i])) {
+      const did = (b[i] << 8) | b[i + 1], known = SNAP_LEN[did];
+      for (let len = 1; len <= 6 && i + 2 + len <= b.length; len++) {
+        const rest = best(i + 2 + len);
+        if (!rest) continue;
+        const score = rest.score + (known === len ? 3 : known ? -3 : 0) - (len > 4 ? 1 : 0);
+        if (!res || score > res.score) res = { score, items: [[did, b.slice(i + 2, i + 2 + len)], ...rest.items] };
+      }
+    }
+    memo.set(i, res);
+    return res;
+  };
+  const r = best(0);
+  return r ? new Map(r.items) : null;
+}
+
+// The time counter restarted around 2026-10-10 (trip1 on 10-11 read 88,600 s at 25,650 km; an OBC record at
+// 25,483 km read 324,053 s): a record below this odometer predates the restart, so its counter gives no time.
+const COUNTER_RESTART_KM = 25650;
+const agoText = s => s < 3600 ? `${Math.round(s / 60)} min ago` : s < 2 * 86400 ? `${(s / 3600).toFixed(1)} h ago`
+  : `${(s / 86400).toFixed(1)} days ago (${new Date(Date.now() - s * 1000).toLocaleDateString()})`;
+
+// The values worth a glance: odometer, time (vehicle time counter vs 552 now), SoC, 12 V, mains, high voltage.
+function snapshotSummary(id, bytes) {
+  const dids = splitSnapshot(bytes.slice(2));
+  if (!dids) return `${bytes.length} bytes, not split into values`;
+  const parts = [], now = frames.get(String(0x552));
+  const km = dids.get(0xD49C);
+  let recordKm = null;
+  if (km) {
+    // The motor sends 00 80 <km hi> <km lo>; OBC and VCU the plain number.
+    const v = recordKm = km.length === 4 && km[1] === 0x80 ? be(km.slice(2)) : be(km);
+    const nowKm = now ? be(now.data.slice(4, 7)) : null;
+    parts.push(`${v.toLocaleString("en")} km` + (nowKm !== null && nowKm >= v ? ` (${nowKm - v} km ago)` : ""));
+  }
+  const tc = dids.get(0xD4CA);
+  if (tc && tc.length === 4 && now && !(recordKm !== null && recordKm < COUNTER_RESTART_KM)) {
+    const ago = (be(now.data.slice(0, 4)) - be(tc)) / 10;
+    if (ago >= 0) parts.push(agoText(ago) + "*");
+  }
+  const soc = dids.get(0xD8EB);
+  if (soc && soc.length === 2) parts.push(`SoC ${(be(soc) / 10).toFixed(0)} %`);
+  const lv = dids.get(0xD822), lvSteer = id === 0x695 && dids.get(0xD404);
+  if (lv && lv.length === 2) parts.push(`12 V ${(be(lv) / 100).toFixed(1)} V`);
+  else if (lvSteer && lvSteer.length === 1) parts.push(`12 V ${(lvSteer[0] / 10).toFixed(1)} V`);
+  const mains = dids.get(0xD82B);
+  if (mains && mains.length === 2 && be(mains) > 0) parts.push(`charging, mains ${be(mains)} V`);
+  const hvObc = dids.get(0xD824), hvMotor = dids.get(0xDC06);
+  if (hvObc && hvObc.length === 2) parts.push(`HV ${be(hvObc)} V`);
+  else if (hvMotor && hvMotor.length === 2) parts.push(be(hvMotor) ? `HV ${(be(hvMotor) / 32).toFixed(0)} V` : "HV off");
+  return parts.join(" · ") || `${dids.size} values, none of the known ones`;
+}
 
 // Clearing deletes the codes with their snapshot / extended data, so it asks first, and makes you type the ECU's
 // name when a listed fault's records were not read on this page (or the ECU has none to give).
@@ -1209,16 +1334,16 @@ function clearFaults(id, ecu, list) {
       `Type ${ecu} to clear anyway.`);
     if (typed === null || typed.trim().toLowerCase() !== ecu.toLowerCase()) return;
   }
-  send(`uds ${DTC_RECORD_PREFIX[id]}_dtc_clear FFFFFF`);
+  track(`${id} clear`, id, `${DTC_RECORD_PREFIX[id]}_dtc_clear`, "FFFFFF");
 }
 
 function renderDtcs(online) {
   const box = $("#uds-dtcs");
   const rows = [];
-  if (session) {
+  for (const [id, session] of sessions) {
     const d = document.createElement("div");
     d.className = "st";
-    d.textContent = `BMS session: ${SESSIONS[session.type] || hex(session.type)}` +
+    d.textContent = `${ECUS[id] || hex(id, 3)} session: ${SESSIONS[session.type] || hex(session.type)}` +
       (session.p2 !== null ? ` (P2 ${session.p2} ms, P2* ${session.p2star} ms)` : "") +
       ` at ${(session.t / 1000).toFixed(0)} s. The extended session ends by itself ~5 s after the last request.`;
     rows.push(d);
@@ -1248,6 +1373,13 @@ function renderDtcs(online) {
       h.append(" ", b);
     }
     rows.push(h);
+    const clear = tracked.get(`${id} clear`);
+    if (clear) {
+      const d = document.createElement("div");
+      d.className = "res" + (clear.state === "ok" || clear.state === "sending" ? "" : " bad");
+      d.textContent = "Clear faults: " + (clear.state === "ok" ? "accepted, read the list again" : outcomeText(clear));
+      rows.push(d);
+    }
     for (const e of list.items) {
       const d = document.createElement("div");
       d.className = "dtc";
@@ -1258,19 +1390,64 @@ function renderDtcs(online) {
       st.className = "st";
       st.textContent = `${e.failure} · ${e.status} (status ${hex(e.statusByte)})`;
       d.append(c, e.name, st);
-      // Snapshot / extended data, where uds_client has them for this ECU (not the park lock).
+      // Snapshot / extended data, where uds_client has them for this ECU (not the park lock). Each request's outcome
+      // goes on a line of its own under the buttons.
       const prefix = DTC_RECORD_PREFIX[id];
-      const records = [[`${prefix}_dtc_snapshot`, "Snapshot"], [`${prefix}_dtc_extended`, "Extended data"]]
-        .filter(([name]) => prefix && hasRequest(name));
-      for (const [name, label] of records) {
+      const records = [["snapshot", "Snapshot"], ["extended", "Extended data"]]
+        .map(([kind, label]) => ({ kind, label, name: `${prefix}_dtc_${kind}`, key: `${id} ${kind} ${e.hexParam}` }))
+        .filter(r => prefix && hasRequest(r.name));
+      const idle = online && !udsBusy() && !readAll;
+      const results = [];
+      for (const r of records) {
         const b = document.createElement("button");
-        b.textContent = label;
-        b.disabled = !online || udsBusy() || !!readAll;
-        b.onclick = () => send(`uds ${name} ${e.hexParam}`);
+        const tr = tracked.get(r.key), msg = udsMessages.get(recordKey(ecu, e, r.kind));
+        b.textContent = tr && tr.state === "sending" ? r.label + "…" : r.label;
+        b.disabled = !idle;
+        b.onclick = () => track(r.key, id, r.name, e.hexParam);
         d.append(b);
+        // The newest of: the reply (decoded), or what went wrong with the latest try.
+        let text = null, bad = false;
+        if (tr && tr.state !== "ok" && !(msg && msg.t > tr.after)) {
+          text = outcomeText(tr);
+          bad = tr.state !== "sending";
+        } else if (msg) {
+          text = (r.kind === "snapshot" ? snapshotSummary(id, msg.bytes)
+            : `${msg.bytes.length} bytes: ${msg.bytes.map(x => hex(x)).join(" ")}`) + ` (read at ${(msg.t / 1000).toFixed(0)} s)`;
+        }
+        if (!text) continue;
+        const line = document.createElement("div");
+        line.className = "res" + (bad ? " bad" : "");
+        line.textContent = `${r.label}: ${text}`;
+        // "Only in the extended session": open it and ask again, within the ~5 s the ECU keeps it.
+        const sessionName = `${prefix}_session_extended`;
+        if (tr && tr.state === "refused" && (tr.nrc === 0x7E || tr.nrc === 0x7F) && hasRequest(sessionName)) {
+          const retry = document.createElement("button");
+          retry.className = "danger";
+          retry.textContent = "Retry in extended session";
+          retry.title = "UDS 10 03, then the same request; the ECU falls back to the default session by itself";
+          retry.disabled = !idle;
+          retry.onclick = () => track(`${id} session`, id, sessionName, null, () => track(r.key, id, r.name, e.hexParam));
+          line.append(" ", retry);
+        }
+        results.push(line);
       }
+      const session = tracked.get(`${id} session`);
+      if (session && session.state !== "ok" && records.some(r => tracked.get(r.key) && tracked.get(r.key).after < session.after)) {
+        const line = document.createElement("div");
+        line.className = "res" + (session.state === "sending" ? "" : " bad");
+        line.textContent = "Extended session: " + outcomeText(session);
+        results.push(line);
+      }
+      d.append(...results);
       rows.push(d);
     }
+  }
+  if (rows.some(r => r.textContent.includes("ago*"))) {
+    const d = document.createElement("div");
+    d.className = "st";
+    d.textContent = "* From the car's time counter (552), which restarts now and then (last around 10 Oct 2026, " +
+      "~25,650 km; older records get no time). Wrong if it restarted again since. The km are always right.";
+    rows.push(d);
   }
   box.replaceChildren(...rows);
 }

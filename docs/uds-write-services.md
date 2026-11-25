@@ -27,8 +27,8 @@ Implemented that way (2026-11-23): `<prefix>_dtc_clear` for all 8 ECUs, the page
 request's parameter, and `allowed()` accepts nothing else, so one group or one DTC can't be cleared. The red "Clear
 faults" button sits next to an ECU's fault list (so it appears only after the list was read) and always asks first;
 if any listed fault's snapshot or extended data hasn't been read on that page, it lists them and wants the ECU's name
-typed. Not tried on the car yet: whether each ECU accepts it in the default session (else `7F 14 7F` / `22`; the
-page only offers the extended session for the BMS). Faults outside the list's mask `09` (e.g. only pending) are not
+typed. First try (motor, 2026-11-25, in Ready): `7F 14 22`, conditions not correct; the page now says so and
+suggests the car on but not in Ready. Where an ECU wants the extended session, "Sessions" has `10 03` for each. Faults outside the list's mask `09` (e.g. only pending) are not
 shown, so they go without their records being offered.
 
 ## Write a DID: `2E` WriteDataByIdentifier

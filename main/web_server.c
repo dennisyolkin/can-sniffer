@@ -29,7 +29,7 @@
 #define FRAMES_MAGIC 'F'
 #define FRAMES_VERSION 1
 #define STATUS_JSON_MAX 768
-// Request list (about 80 characters per request, ~140 requests), UDS_CLIENT_LOG_LEN entries of about 110 characters
+// Request list (about 80 characters per request, ~155 requests), UDS_CLIENT_LOG_LEN entries of about 110 characters
 // each, and the latest multi-frame message as hex (2 characters per byte).
 // Plus the ECU scan list (~70 characters per ECU).
 #define UDS_JSON_MAX (14336 + 2 * UDS_CLIENT_MSG_MAX + 6144)
