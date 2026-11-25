@@ -29,6 +29,8 @@ Sources:
   for the last ~10 min; fault counts again after parking.
 - **20261123-fault-codes** (2026-11-23): 110 s parked in Ready, TX mode: park lock reads, fault lists (`19 02 09`)
   from the 7 ECUs twice, fault counts once.
+- **20261125-fault-codes** (2026-11-25): ~9 min parked in Ready, 26,057 km: fault lists, snapshot (`19 04`) of 13 of
+  the 15 faults, extended data (`19 06`) of a few, fault counts and lists again, one clear (motor).
 - **PSA-RE** ([github.com/prototux/PSA-RE](https://github.com/prototux/PSA-RE)): community database of PSA
   frames in YAML. The ë-C4 is car code `C41`, architecture `AEE2010.electric` (child of `.ev`, `.full`).
   Decode a capture with `tools/psare.py <session> <PSA-RE checkout>`; it resolves the variant chain.
@@ -231,7 +233,7 @@ Reading:
 - **Nothing is failing in the drive train now.** Motor, VCU, steering and park lock hold only old, confirmed
   faults (`28`: not failed at the last test, not pending). The BMS has none (2026-11-01) and the ABS has none.
 - The motor's four U codes (lost BSI, battery ECU, OBC/DC-DC and VCU), the park lock's lost motor ECU and the
-  steering's under voltage look like **one event**: a 12 V dip, a 12 V battery disconnect or the VCU reflash
+  steering's under voltage look like **one event** (**wrong**, see the snapshots below: four occasions): a 12 V dip, a 12 V battery disconnect or the VCU reflash
   (2023-09-05) would make every ECU lose the others at once. Unproven; the snapshot / extended data (`19 04` /
   `19 06`, buttons on each fault row) usually hold the odometer and an occurrence counter.
 - **OBC:** four faults that are *pending* and still flagged failed, with "not completed this drive": they failed at
@@ -254,6 +256,55 @@ Reading:
   only says the camera's own fault log overflowed. B1238 = windscreen blocked once (dirt, frost).
 - **VCU P0C46-25** (battery cells, signal changed implausibly) is the only stored code about the battery. Old and
   not repeated; the BMS itself has no codes.
+
+### Snapshots and extended data (20261125-fault-codes)
+
+Snapshot replies (`59 04 <DTC> <status> <record no.> <number of DIDs>` + DID / value pairs, ISO 14229). The DIDs
+are mostly the ECU's own `22` DIDs; many (`DAxx`, `D5Dx`, `DBFx`) are not in PSA-RE, and lengths differ from
+PSA-RE in places (OBC `D82B`/`D82C` 2 B here), so the records were split by searching for the layout that fits.
+Time = `D4CA` vehicle time counter (×0.1 s), compared with `552` b0-3 in our own sessions.
+
+| ECU / fault | km (`D49C`) | When | Conditions |
+|-------------|-------------|------|------------|
+| OBC P1A71-93 (record `11`) | 26,021 | **2026-11-22, ~6 min before that session's recording started** (`D4CA` 0x02381D49 vs `552` 0x02382B5F) | **charging on AC**: mains `D82B` 408 V (3-phase, line to line), `D82C` 0x79; SoC 59.3 % (the session read 59.2 %); DC/DC converting, 12 V 13.6 V, HV 406 V |
+| OBC P10E6-89 (record `13`) | 25,483 | before 2026-10-11 (time counter from an earlier count, see below) | SoC 30.4 %, DC/DC converting, 12 V 13.7 V, HV 384 V; no mains values in this record |
+| OBC P10E6-81 | 22,184 | earlier | SoC 22.4 %, DC/DC converting, 12 V 13.6 V, HV 380 V |
+| OBC P10E6-86 | — | not read (only Extended data was pressed) | |
+| VCU P0C46-25 | 25,981 | **2026-11-20, ~62 min before 20261120-01** (2 km earlier) | stopped, motor 0 rpm, battery 7 °C, coolant 8.9 °C, 12 V 13.4 V |
+| Motor U0167 (BSI) | 25,464 | | |
+| Motor U110E (OBC / DC-DC) | 23,755 | | |
+| Motor U1537-08, U11A0 (BMS) | 13,864 | the same moment (`DBFA` 1E52F028 / 1E52F041) | |
+| Motor U114A (VCU) | 12,636 | | the only one with HV up (`DC06` 396 V) |
+| Steering C120D-A2 | — | no mileage in the record | `D404` 12.5 V (under voltage fault), assistance deactivated, ignition signal on |
+| Camera U1F00, U1208 | — | | one DID `0113` = 0 each: nothing useful |
+
+Motor records: `D49C` reads `0x80` + km in 3 bytes (`00 80 63 78` = 25,464; PSA-RE's ×0.1 gives 841,407 km), `DC00`
+0 rpm, `DC05` 0 A and `DC06` 0 V in all but one (HV off), `DC79` (PSA-RE "filtered traction battery voltage")
+12.2-13.7 if ×1/1024, which looks like the 12 V supply. The record header says 9 DIDs but carries ~21.
+
+What this changes:
+- **The motor's U codes are not one event** (as guessed on 11-23): four occasions between 12,636 and 25,464 km,
+  each with the car at rest and (but one) the high voltage off, i.e. while waking, sleeping or charging. Lost
+  messages around those transitions, kept because nobody cleared them. Harmless.
+- **P1A71-93 happened during an AC charge just before the 11-22 drive**, presumably when that charge ended or the
+  cable was unplugged (open: did the charge stop by itself, or was it unplugged mid-charge?). Its status `6D` is from
+  that charge. P10E6 came up on two earlier occasions (22,184 and 25,483 km), each with the DC/DC converting.
+- **P0C46-25** (battery cell signal) was set on 11-20 at rest, before the drive; BMS itself has no codes.
+- **`D4CA` was reset around 2026-10-10:** trip1 (10-11, 25,650 km) read 88,600 s, and P10E6-89's record (25,483 km,
+  earlier) reads 324,053 s. So the counter restarts now and then (a 12 V disconnect? a BSI reset?), and only
+  records since the last restart can be dated.
+
+Extended data (`19 06`) did not work anywhere it was tried: the **OBC** answers `7F 19 12` (sub-function not
+supported: it has no extended data at all), the **motor** `7F 19 7E` (not supported in the active session: it
+wants the extended session `10 03` first). Not tried: VCU, ABS, steering, camera.
+
+**Clearing the motor's codes** (`14 FF FF FF`, parked in Ready, HV 392 V) was refused with `7F 14 22`
+(conditions not correct): nothing was cleared (counts and lists unchanged afterwards). Not the session (that
+would be `7F`/`7E`); most likely the motor won't clear with the high voltage up. Try with ignition on, not Ready.
+
+The fault counts and lists read after the snapshots were identical to the first reads and to 11-23. Retries: our
+requests lost arbitration more often in this session (up to 4 tries), and the steering's fault count failed after
+5 (`uds_tx_failed`), at the same ~1,555 frames/s.
 
 Park lock reads on 2026-11-23 (parked in P, Ready): D400 status `00` = locked; D40C activations `1D7F` = 7,551;
 D40E activation errors `FFFFFFFC` (probably "not available", not a count); D404 supply 14.81 / 14.82 V (= the DC/DC
