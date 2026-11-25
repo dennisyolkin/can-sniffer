@@ -97,7 +97,9 @@ Leaving listen-only makes the node ACK every frame, so it is a bus participant e
 a build option, not a runtime switch:
 
 - `CONFIG_CAN_TX_MODE` (**default since 2026-11-21**, `-B build`): normal TWAI mode, the node ACKs every frame, and `uds_client` adds a
-  "Diagnostics" block to the Raw tab with one button per predefined request; there is no free-form send box.
+  "Diagnostics" block to the Raw tab with one button per predefined request, and fills the **Faults** tab (fault
+  codes of all 8 ECUs, BMS included: one card per ECU with read / count / history / clear and the fault rows, plus
+  "Read all ECUs", which asks each ECU's list in turn and notes which didn't answer); there is no free-form send box.
   Header badge "TX". Nothing is sent unless a button asks for it.
 - Listen-only (`-D LISTEN_ONLY_BUILD=1`, build `build-listen`; the default until 2026-11-21): the node sends nothing,
   not even ACKs.

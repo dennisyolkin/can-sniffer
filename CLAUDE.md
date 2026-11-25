@@ -197,7 +197,7 @@ idf.py -B build menuconfig
 ```
 
 - Two modes, one option (`CONFIG_CAN_TX_MODE`, menuconfig → CAN bus). **TX mode is the default** (`-B build`, see
-  Hard rules): the page shows a red "TX" badge and the request buttons (Raw tab, "Diagnostics"), and `events.csv`
+  Hard rules): the page shows a red "TX" badge, the request buttons (Raw tab, "Diagnostics") and the Faults tab, and `events.csv`
   logs `can_mode=tx`. In TX mode `bus_state` means something (it should stay `error_active`), and any bus error may
   have reached the car's bus. Bus-off is not recovered from until reboot.
 - **Listen-only** (kept just in case), in its own directory so the default `sdkconfig` stays untouched:

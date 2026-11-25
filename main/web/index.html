@@ -68,6 +68,8 @@
   #uds-dtcs button { font-size: .9rem; padding: .45rem .9rem; margin: .4rem .5rem 0 0; min-height: 2.3rem; }
   #uds-dtcs .res { font-size: .85rem; margin-top: .25rem; }
   #uds-dtcs .res.bad { color: var(--bad); }
+  #uds-dtcs .fecu { border: 1px solid var(--line); border-radius: 8px; padding: .4rem .7rem .6rem; margin: .7rem 0; }
+  #uds-dtcs .fecu .ecu { margin-top: 0; font-size: 1rem; }
   #uds-values { display: grid; grid-template-columns: max-content 1fr; gap: .15rem .8rem; font-size: .9rem; margin: .3rem 0 .6rem; }
   #uds-values .t { color: var(--muted); font-size: .8rem; }
   #uds-messages details { margin-bottom: .3rem; }
@@ -178,6 +180,7 @@
     <button data-tab="drive" class="active">Drive</button>
     <button data-tab="battery">Battery</button>
     <button data-tab="car">Car</button>
+    <button data-tab="faults">Faults</button>
     <button data-tab="raw">Raw</button>
   </nav>
 </header>
@@ -305,6 +308,13 @@
   </div>
 </section>
 
+<section id="tab-faults" hidden>
+  <h2>Fault codes</h2>
+  <p class="st" id="faults-note"></p>
+  <div class="btns" id="faults-top"><button class="run" id="faults-read-all">Read all ECUs</button></div>
+  <div id="uds-dtcs"></div>
+</section>
+
 <section id="tab-raw" hidden>
   <h2>Logger</h2>
   <div class="grid">
@@ -326,7 +336,6 @@
       <div class="found" id="uds-scan-found"></div>
     </details>
     <div id="uds-buttons"></div>
-    <div id="uds-dtcs"></div>
     <div id="uds-values"></div>
     <div id="uds-messages"></div>
     <div id="uds-log"></div>
@@ -1196,9 +1205,10 @@ const hasRequest = name => !!uds && uds.requests.some(r => r.name === name);
 // state: sending → ok / refused (negative reply) / silent (no reply) / failed (not sent) / lost (board ignored it).
 const tracked = new Map();
 
-function track(key, id, req, param, then) {
+// then: called once on a positive outcome; next: once on any outcome.
+function track(key, id, req, param, then, next) {
   const last = uds.log[uds.log.length - 1];
-  tracked.set(key, { req, id, after: last ? last.t : -1, state: "sending", sentAt: Date.now(), then });
+  tracked.set(key, { req, id, after: last ? last.t : -1, state: "sending", sentAt: Date.now(), then, next });
   send(`uds ${req}${param ? " " + param : ""}`);
   dirty = true;
 }
@@ -1221,8 +1231,10 @@ function followTracked(log) {
     }
     // The board ignores a request while another is in flight; don't wait forever for one it dropped.
     if (r.state === "sending" && Date.now() - r.sentAt > 5000 && !udsBusy()) r.state = "lost";
-    if (r.state !== "sending") dirty = true;
+    if (r.state === "sending") continue;
+    dirty = true;
     if (r.state === "ok" && r.then) r.then();
+    if (r.next) r.next(r.state);
   }
 }
 
@@ -1337,111 +1349,166 @@ function clearFaults(id, ecu, list) {
   track(`${id} clear`, id, `${DTC_RECORD_PREFIX[id]}_dtc_clear`, "FFFFFF");
 }
 
-function renderDtcs(online) {
-  const box = $("#uds-dtcs");
-  const rows = [];
-  for (const [id, session] of sessions) {
+// The ECUs with fault-code requests, in page order (uds_client.c names them by prefix).
+const FAULT_ECUS = [0x694, 0x58F, 0x686, 0x682, 0x68D, 0x695, 0x5AA, 0x64A].map(id => {
+  const prefix = DTC_RECORD_PREFIX[id];
+  return id === BMS_RX
+    ? { id, list: "bms_dtc_active", count: "bms_dtc_count", history: "bms_dtc_history" }
+    : { id, list: `${prefix}_dtc_list`, count: `${prefix}_dtc_count` };
+});
+const listKinds = new Map();  // reply ID → "list" / "history": which list was asked for last
+let faultsReadAll = null;     // { queue: [FAULT_ECUS entries] } while "Read all ECUs" runs
+
+function readFaults(f, kind, next) {
+  if (kind !== "count") listKinds.set(f.id, kind);
+  track(`${f.id} ${kind}`, f.id, f[kind], null, null, next);
+}
+
+// One ECU after the other, whatever each answers (a sleeping ECU just says "no answer").
+function nextFaultRead() {
+  const f = faultsReadAll && faultsReadAll.queue.shift();
+  if (!f) { faultsReadAll = null; dirty = true; return; }
+  readFaults(f, "list", nextFaultRead);
+}
+
+$("#faults-read-all").onclick = () => {
+  if (faultsReadAll) { faultsReadAll = null; dirty = true; return; }
+  faultsReadAll = { queue: FAULT_ECUS.filter(f => hasRequest(f.list)) };
+  nextFaultRead();
+};
+
+function faultRow(id, ecu, e, idle) {
+  const d = document.createElement("div");
+  d.className = "dtc";
+  const c = document.createElement("span");
+  c.className = "code";
+  c.textContent = e.code + " ";
+  const st = document.createElement("div");
+  st.className = "st";
+  st.textContent = `${e.failure} · ${e.status} (status ${hex(e.statusByte)})`;
+  d.append(c, e.name, st);
+  // Snapshot / extended data, where uds_client has them for this ECU (not the park lock). Each request's outcome
+  // goes on a line of its own under the buttons.
+  const prefix = DTC_RECORD_PREFIX[id];
+  const records = [["snapshot", "Snapshot"], ["extended", "Extended data"]]
+    .map(([kind, label]) => ({ kind, label, name: `${prefix}_dtc_${kind}`, key: `${id} ${kind} ${e.hexParam}` }))
+    .filter(r => prefix && hasRequest(r.name));
+  const results = [];
+  for (const r of records) {
+    const b = document.createElement("button");
+    const tr = tracked.get(r.key), msg = udsMessages.get(recordKey(ecu, e, r.kind));
+    b.textContent = tr && tr.state === "sending" ? r.label + "…" : r.label;
+    b.disabled = !idle;
+    b.onclick = () => track(r.key, id, r.name, e.hexParam);
+    d.append(b);
+    // The newest of: the reply (decoded), or what went wrong with the latest try.
+    let text = null, bad = false;
+    if (tr && tr.state !== "ok" && !(msg && msg.t > tr.after)) {
+      text = outcomeText(tr);
+      bad = tr.state !== "sending";
+    } else if (msg) {
+      text = (r.kind === "snapshot" ? snapshotSummary(id, msg.bytes)
+        : `${msg.bytes.length} bytes: ${msg.bytes.map(x => hex(x)).join(" ")}`) + ` (read at ${(msg.t / 1000).toFixed(0)} s)`;
+    }
+    if (!text) continue;
+    const line = document.createElement("div");
+    line.className = "res" + (bad ? " bad" : "");
+    line.textContent = `${r.label}: ${text}`;
+    // "Only in the extended session": open it and ask again, within the ~5 s the ECU keeps it.
+    const sessionName = `${prefix}_session_extended`;
+    if (tr && tr.state === "refused" && (tr.nrc === 0x7E || tr.nrc === 0x7F) && hasRequest(sessionName)) {
+      const retry = document.createElement("button");
+      retry.className = "danger";
+      retry.textContent = "Retry in extended session";
+      retry.title = "UDS 10 03, then the same request; the ECU falls back to the default session by itself";
+      retry.disabled = !idle;
+      retry.onclick = () => track(`${id} session`, id, sessionName, null, () => track(r.key, id, r.name, e.hexParam));
+      line.append(" ", retry);
+    }
+    results.push(line);
+  }
+  const session = tracked.get(`${id} session`);
+  if (session && session.state !== "ok" && records.some(r => tracked.get(r.key) && tracked.get(r.key).after < session.after)) {
+    const line = document.createElement("div");
+    line.className = "res" + (session.state === "sending" ? "" : " bad");
+    line.textContent = "Extended session: " + outcomeText(session);
+    results.push(line);
+  }
+  d.append(...results);
+  return d;
+}
+
+function faultCard(f, online, idle) {
+  const id = f.id, ecu = ECUS[id] || hex(id, 3), list = dtcLists.get(id), count = dtcCounts.get(id);
+  const card = document.createElement("div");
+  card.className = "fecu";
+  const h = document.createElement("div");
+  h.className = "ecu";
+  const cleared = dtcCleared.get(id);
+  h.textContent = ecu + ": " + (list
+    ? (list.items.length ? `${list.items.length} fault${list.items.length === 1 ? "" : "s"}` : "no faults") +
+      (listKinds.get(id) === "history" ? " (history)" : "") + ` · read at ${(list.t / 1000).toFixed(0)} s` +
+      (cleared > list.t ? ` · cleared at ${(cleared / 1000).toFixed(0)} s, read again` : "")
+    : count ? `${count.n} fault${count.n === 1 ? "" : "s"} (count only) · read at ${(count.t / 1000).toFixed(0)} s`
+    : "not read yet");
+  card.append(h);
+  const btns = document.createElement("div");
+  const actions = [["list", list ? "Read again" : "Read faults"], ["count", "Count"]];
+  if (f.history) actions.push(["history", "History"]);
+  for (const [kind, label] of actions.filter(([kind]) => hasRequest(f[kind]))) {
+    const b = document.createElement("button");
+    const tr = tracked.get(`${id} ${kind}`);
+    b.textContent = tr && tr.state === "sending" ? label + "…" : label;
+    b.disabled = !idle;
+    b.onclick = () => readFaults(f, kind);
+    btns.append(b);
+  }
+  const clearName = `${DTC_RECORD_PREFIX[id]}_dtc_clear`;
+  if (list && hasRequest(clearName)) {
+    const b = document.createElement("button");
+    b.className = "danger";
+    b.textContent = "Clear faults";
+    b.title = "UDS 14 FF FF FF: deletes every fault code in this ECU";
+    b.disabled = !idle;
+    b.onclick = () => clearFaults(id, ecu, list);
+    btns.append(b);
+  }
+  card.append(btns);
+  // Outcomes worth a line: a read that failed, a clear, the session.
+  for (const [kind, label] of [["list", "Read faults"], ["history", "History"], ["count", "Count"], ["clear", "Clear faults"]]) {
+    const tr = tracked.get(`${id} ${kind}`);
+    if (!tr || (tr.state === "ok" && kind !== "clear") || tr.state === "sending") continue;
+    const d = document.createElement("div");
+    d.className = "res" + (tr.state === "ok" ? "" : " bad");
+    d.textContent = `${label}: ` + (tr.state === "ok" ? "accepted, read the list again" : outcomeText(tr)) +
+      (tr.state === "silent" && kind !== "clear" ? " (asleep?)" : "");
+    card.append(d);
+  }
+  const session = sessions.get(id);
+  if (session) {
     const d = document.createElement("div");
     d.className = "st";
-    d.textContent = `${ECUS[id] || hex(id, 3)} session: ${SESSIONS[session.type] || hex(session.type)}` +
-      (session.p2 !== null ? ` (P2 ${session.p2} ms, P2* ${session.p2star} ms)` : "") +
-      ` at ${(session.t / 1000).toFixed(0)} s. The extended session ends by itself ~5 s after the last request.`;
-    rows.push(d);
+    d.textContent = `Session: ${SESSIONS[session.type] || hex(session.type)} at ${(session.t / 1000).toFixed(0)} s` +
+      (session.type === 3 ? " (ends by itself ~5 s after the last request)" : "");
+    card.append(d);
   }
-  if (dtcCounts.size) {
-    const d = document.createElement("div");
-    d.textContent = "Fault count (active / confirmed): " + [...dtcCounts].map(([id, c]) =>
-      `${ECUS[id] || hex(id, 3)} ${c.n} (${(c.t / 1000).toFixed(0)} s)`).join(" · ");
-    rows.push(d);
-  }
-  for (const [id, list] of dtcLists) {
-    const ecu = ECUS[id] || hex(id, 3);
-    const h = document.createElement("div");
-    h.className = "ecu";
-    const cleared = dtcCleared.get(id);
-    h.textContent = `${ecu} faults: ` + (list.items.length ? `${list.items.length}` : "none") +
-      ` (${(list.t / 1000).toFixed(0)} s)` +
-      (cleared > list.t ? ` · cleared at ${(cleared / 1000).toFixed(0)} s, read the list again` : "");
-    const clearName = `${DTC_RECORD_PREFIX[id]}_dtc_clear`;
-    if (hasRequest(clearName)) {
-      const b = document.createElement("button");
-      b.className = "danger";
-      b.textContent = "Clear faults";
-      b.title = "UDS 14 FF FF FF: deletes every fault code in this ECU";
-      b.disabled = !online || udsBusy() || !!readAll;
-      b.onclick = () => clearFaults(id, ecu, list);
-      h.append(" ", b);
-    }
-    rows.push(h);
-    const clear = tracked.get(`${id} clear`);
-    if (clear) {
-      const d = document.createElement("div");
-      d.className = "res" + (clear.state === "ok" || clear.state === "sending" ? "" : " bad");
-      d.textContent = "Clear faults: " + (clear.state === "ok" ? "accepted, read the list again" : outcomeText(clear));
-      rows.push(d);
-    }
-    for (const e of list.items) {
-      const d = document.createElement("div");
-      d.className = "dtc";
-      const c = document.createElement("span");
-      c.className = "code";
-      c.textContent = e.code + " ";
-      const st = document.createElement("div");
-      st.className = "st";
-      st.textContent = `${e.failure} · ${e.status} (status ${hex(e.statusByte)})`;
-      d.append(c, e.name, st);
-      // Snapshot / extended data, where uds_client has them for this ECU (not the park lock). Each request's outcome
-      // goes on a line of its own under the buttons.
-      const prefix = DTC_RECORD_PREFIX[id];
-      const records = [["snapshot", "Snapshot"], ["extended", "Extended data"]]
-        .map(([kind, label]) => ({ kind, label, name: `${prefix}_dtc_${kind}`, key: `${id} ${kind} ${e.hexParam}` }))
-        .filter(r => prefix && hasRequest(r.name));
-      const idle = online && !udsBusy() && !readAll;
-      const results = [];
-      for (const r of records) {
-        const b = document.createElement("button");
-        const tr = tracked.get(r.key), msg = udsMessages.get(recordKey(ecu, e, r.kind));
-        b.textContent = tr && tr.state === "sending" ? r.label + "…" : r.label;
-        b.disabled = !idle;
-        b.onclick = () => track(r.key, id, r.name, e.hexParam);
-        d.append(b);
-        // The newest of: the reply (decoded), or what went wrong with the latest try.
-        let text = null, bad = false;
-        if (tr && tr.state !== "ok" && !(msg && msg.t > tr.after)) {
-          text = outcomeText(tr);
-          bad = tr.state !== "sending";
-        } else if (msg) {
-          text = (r.kind === "snapshot" ? snapshotSummary(id, msg.bytes)
-            : `${msg.bytes.length} bytes: ${msg.bytes.map(x => hex(x)).join(" ")}`) + ` (read at ${(msg.t / 1000).toFixed(0)} s)`;
-        }
-        if (!text) continue;
-        const line = document.createElement("div");
-        line.className = "res" + (bad ? " bad" : "");
-        line.textContent = `${r.label}: ${text}`;
-        // "Only in the extended session": open it and ask again, within the ~5 s the ECU keeps it.
-        const sessionName = `${prefix}_session_extended`;
-        if (tr && tr.state === "refused" && (tr.nrc === 0x7E || tr.nrc === 0x7F) && hasRequest(sessionName)) {
-          const retry = document.createElement("button");
-          retry.className = "danger";
-          retry.textContent = "Retry in extended session";
-          retry.title = "UDS 10 03, then the same request; the ECU falls back to the default session by itself";
-          retry.disabled = !idle;
-          retry.onclick = () => track(`${id} session`, id, sessionName, null, () => track(r.key, id, r.name, e.hexParam));
-          line.append(" ", retry);
-        }
-        results.push(line);
-      }
-      const session = tracked.get(`${id} session`);
-      if (session && session.state !== "ok" && records.some(r => tracked.get(r.key) && tracked.get(r.key).after < session.after)) {
-        const line = document.createElement("div");
-        line.className = "res" + (session.state === "sending" ? "" : " bad");
-        line.textContent = "Extended session: " + outcomeText(session);
-        results.push(line);
-      }
-      d.append(...results);
-      rows.push(d);
-    }
-  }
+  if (list) for (const e of list.items) card.append(faultRow(id, ecu, e, idle));
+  return card;
+}
+
+function renderFaults() {
+  const online = ws && ws.readyState === WebSocket.OPEN;
+  setText($("#faults-note"), uds ? "Parked, Ready on (or ignition on). Snapshot: when and how the fault was stored; " +
+    "Extended data: counters, where the ECU keeps them." : "Fault codes need the TX mode image, which sends " +
+    "requests to the ECUs. This board runs listen-only (or hasn't sent its request list yet).");
+  $("#faults-top").hidden = !uds;
+  if (!uds) { $("#uds-dtcs").replaceChildren(); return; }
+  followTracked(uds.log);  // also times out a request the board dropped while nothing else arrives
+  const idle = online && !udsBusy() && !readAll && !faultsReadAll;
+  const all = $("#faults-read-all");
+  setText(all, faultsReadAll ? `Stop (${faultsReadAll.queue.length + 1} left)` : "Read all ECUs");
+  all.disabled = !online || (!faultsReadAll && !idle);
+  const rows = FAULT_ECUS.filter(f => hasRequest(f.list)).map(f => faultCard(f, online, idle));
   if (rows.some(r => r.textContent.includes("ago*"))) {
     const d = document.createElement("div");
     d.className = "st";
@@ -1449,7 +1516,7 @@ function renderDtcs(online) {
       "~25,650 km; older records get no time). Wrong if it restarted again since. The km are always right.";
     rows.push(d);
   }
-  box.replaceChildren(...rows);
+  $("#uds-dtcs").replaceChildren(...rows);
 }
 
 // --- ECU scan: TesterPresent to every PSA-RE address (uds_client.c), results one character per ECU ---
@@ -1499,7 +1566,8 @@ function renderUds() {
   if (box.dataset.count !== String(uds.requests.length)) {
     box.dataset.count = uds.requests.length;
     const groups = new Map();
-    for (const r of uds.requests.filter(r => !r.param)) {
+    // Fault-code requests live on the Faults tab.
+    for (const r of uds.requests.filter(r => !r.param && !/_dtc_/.test(r.name))) {
       const [group, text] = r.label.includes(": ") ? r.label.split(": ", 2) : ["", r.label];
       if (!groups.has(group)) groups.set(group, []);
       groups.get(group).push({ ...r, text });
@@ -1550,11 +1618,10 @@ function renderUds() {
       setText(b, mine ? `Stop (${readAll.queue.length + 1} left)` : "Read all");
       b.disabled = !online || (!!readAll && !mine);
     } else {
-      b.disabled = !online || udsBusy() || !!readAll;
+      b.disabled = !online || udsBusy() || !!readAll || !!faultsReadAll;
     }
   }
   renderScan(online);
-  renderDtcs(online);
   const values = $("#uds-values");
   values.replaceChildren(...[...udsValues.values()].sort((a, b) => a.name.localeCompare(b.name)).flatMap(v => {
     const k = document.createElement("div");
@@ -1628,6 +1695,7 @@ function render() {
   if (activeTab === "drive") renderDrive();
   else if (activeTab === "battery") renderBattery();
   else if (activeTab === "car") renderCar();
+  else if (activeTab === "faults") renderFaults();
   else if (activeTab === "raw") { renderLogger(); renderUds(); renderRaw(); }
 }
 
