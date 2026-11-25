@@ -81,7 +81,9 @@
   /* Clear faults at the far end of the row, away from the read buttons. */
   #uds-dtcs .acts { display: flex; flex-wrap: wrap; }
   #uds-dtcs .acts button.danger { margin-left: auto; margin-right: 0; }
-  #uds-values { display: grid; grid-template-columns: max-content 1fr; gap: .15rem .8rem; font-size: .9rem; margin: .3rem 0 .6rem; }
+  /* Long names (identification reads) must not push the values past a phone's width. */
+  #uds-values { display: grid; grid-template-columns: fit-content(60%) minmax(0, 1fr); gap: .15rem .8rem; font-size: .9rem; margin: .3rem 0 .6rem; }
+  #uds-values > div { min-width: 0; overflow-wrap: anywhere; }
   #uds-values .t { color: var(--muted); font-size: .8rem; }
   #uds-messages details { margin-bottom: .3rem; }
   #uds-messages summary { cursor: pointer; font-size: .9rem; }

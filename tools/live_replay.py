@@ -250,7 +250,8 @@ class Replay:
         return b"".join(out)
 
     def status_message(self, now_us: int, clients: int) -> str:
-        self.fps, self.fps_count = self.fps_count, 0
+        # Frames per second of capture time, so the header shows the bus rate at any --speed.
+        self.fps, self.fps_count = round(self.fps_count / self.speed), 0
         return json.dumps({
             "type": "status", "uptime_ms": now_us // 1000, "fps": self.fps, "frames": self.frames_total,
             "rx_dropped": 0, "bus_errors": 0, "bus_errors_per_s": 0, "rec": self.rec, "session": self.session,

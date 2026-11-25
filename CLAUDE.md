@@ -226,7 +226,8 @@ idf.py -B build menuconfig
   without a browser and prints the Faults tab as text (exit 1 on a script error); `node tools/page/screenshot.mjs
   <session> [--tab faults] [--dark]` saves a phone-size screenshot from headless Chromium and reports page errors and
   horizontal overflow (setup once: `cd tools/page && npm install && npx playwright install chromium`). Run them after
-  changing the page; look at the screenshot.
+  changing the page; look at the screenshot. Then refresh the committed one-per-tab images in `docs/screenshots/`
+  with `node tools/page/docs_screenshots.mjs` (it fails on page errors or overflow too).
 - The page can be developed without the car: `tools/live_replay.py` serves it and replays a capture over the
   same WebSocket protocol (`uv run --project tools tools/live_replay.py ~/tmp/trip3 --start 150`, then
   http://localhost:8080/). The page is re-read on every request.

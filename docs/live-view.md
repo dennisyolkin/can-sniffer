@@ -248,3 +248,10 @@ bytes of hex, and `kind` one of `tx`, `rx`, `done`, `tx_failed`, `refused`, `mes
 `tx_failed`, `len` is the number of replies or attempts; for `message` the reply length; for `rx_error` 0 =
 sequence, 1 = too long, 2 = incomplete). After the first multi-frame reply the message also carries
 `"msg":{"seq","t","req","id","len","data"}`: the latest complete reply, UDS payload as hex.
+
+## Screenshots
+
+One current image per tab, at phone width (390 px, light theme), from replayed sessions:
+[Drive](screenshots/drive.png) · [Battery](screenshots/battery.png) · [Car](screenshots/car.png) ·
+[Faults](screenshots/faults.png) · [Raw](screenshots/raw.png). Refresh them after changing the page with
+`node tools/page/docs_screenshots.mjs` (sessions from `~/tmp/can-sniff-logs`, see the script).
